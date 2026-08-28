@@ -1,0 +1,18 @@
+# Secrets and local-only artifacts — never uploaded to the build
+.env
+.env.local
+.env.*.local
+
+# Local build output and old SQLite dev database
+.next
+out
+dist
+prisma/dev.db
+prisma/*.db
+prisma/*.db-journal
+
+# Not needed for the Vercel build
+scripts
+Dockerfile
+docker-compose.yml
+*.log

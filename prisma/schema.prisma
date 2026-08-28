@@ -1,0 +1,671 @@
+// ---------------------------------------------------------------------------
+// Inventory Management System - Prisma schema
+// ---------------------------------------------------------------------------
+// Design rules baked into this schema:
+//   * Products are catalog entries only. The VARIANT is the inventory unit.
+//   * Every quantity lives on StockMovement, keyed by (variant, location).
+//     "Stock on hand" is ALWAYS derived: SUM(quantity) WHERE status=available.
+//   * Batches carry cost + received date so FIFO costing and valuation are
+//     computed from the ledger, never hand-maintained.
+//   * AuditLog is system activity; StockMovement is business data. Separate.
+//   * Multi-tenancy: every business table carries a tenantId FK. All queries
+//     MUST filter by tenant_id for data isolation.
+//
+// PostgreSQL-first (Vercel, docker-compose, self-hosted). No provider-specific
+// column types (no PG enums/arrays) so the schema stays portable.
+// ---------------------------------------------------------------------------
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ===========================================================================
+// TENANT (ORGANIZATION)
+// ===========================================================================
+
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique // subdomain, e.g. "acme" → acme.yourapp.com
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users  User[]
+  roles  Role[]
+  locations Location[]
+  categories Category[]
+  products  Product[]
+  variants  Variant[]
+  suppliers Supplier[]
+  purchases Purchase[]
+  stockTransfers StockTransfer[]
+  sales     Sale[]
+  returns   Return[]
+  adjustments StockAdjustment[]
+  reservations Reservation[]
+  movements StockMovement[]
+  batches   Batch[]
+  auditLogs AuditLog[]
+}
+
+// ===========================================================================
+// IDENTITY & ACCESS
+// ===========================================================================
+
+model Role {
+  id            String   @id @default(cuid())
+  tenantId      String?
+  tenant        Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name          String
+  slug          String
+  description   String?
+  isSystemRole  Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  users       User[]
+  permissions RolePermission[]
+
+  @@unique([tenantId, slug])
+}
+
+model RolePermission {
+  id       String @id @default(cuid())
+  roleId   String
+  action   String // e.g. "product.view", "sale.create"
+
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, action])
+  @@index([roleId])
+}
+
+model User {
+  id           String   @id @default(cuid())
+  tenantId     String?
+  tenant       Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email        String
+  passwordHash String
+  name         String
+  role         String   // slug: ADMIN, WAREHOUSE_MANAGER, etc. (kept for backward compat)
+  roleId       String?  // FK to Role model for DB-backed permissions
+  roleRef      Role?    @relation(fields: [roleId], references: [id])
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Locations this user may operate on. Empty for ADMIN/AUDITOR means "all".
+  assignments UserLocation[]
+  auditLogs   AuditLog[]
+
+  purchasesCreated  Purchase[]       @relation("PurchaseCreatedBy")
+  purchasesApproved Purchase[]       @relation("PurchaseApprovedBy")
+  transfersCreated  StockTransfer[]  @relation("TransferCreatedBy")
+  transfersApproved StockTransfer[]  @relation("TransferApprovedBy")
+  sales             Sale[]           @relation("SaleCashier")
+  returnsCreated    Return[]         @relation("ReturnCreatedBy")
+  adjustments       StockAdjustment[] @relation("AdjustmentCreatedBy")
+  adjustmentsApproved StockAdjustment[] @relation("AdjustmentApprovedBy")
+  reservations      Reservation[]    @relation("ReservationCreatedBy")
+  movementsCreated  StockMovement[]  @relation("MovementCreatedBy")
+  movementsApproved StockMovement[]  @relation("MovementApprovedBy")
+
+  @@unique([tenantId, email])
+}
+
+model UserLocation {
+  id        String   @id @default(cuid())
+  userId    String
+  locationId String
+  createdAt DateTime @default(now())
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, locationId])
+  @@index([userId])
+}
+
+// ===========================================================================
+// LOCATIONS  (warehouse / retail_store / damaged - same schema, flags differ)
+// ===========================================================================
+
+model Location {
+  id                 String   @id @default(cuid())
+  tenantId           String?
+  tenant             Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  code               String
+  name               String
+  // WAREHOUSE | RETAIL_STORE | DAMAGED
+  type               String
+  address            String?
+  phone              String?
+  canReceivePurchase Boolean  @default(false)
+  canSellPos         Boolean  @default(false)
+  isDamagedLocation  Boolean  @default(false)
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  users         UserLocation[]
+  movements     StockMovement[]
+  purchases     Purchase[]
+  sales         Sale[]
+  returns       Return[]
+  adjustments   StockAdjustment[]
+  transfersFrom StockTransfer[]  @relation("TransferFrom")
+  transfersTo   StockTransfer[]  @relation("TransferTo")
+  batches       Batch[]
+  reservations  Reservation[]
+
+  @@unique([tenantId, code])
+  @@index([type])
+  @@index([tenantId])
+}
+
+// ===========================================================================
+// CATALOG
+// ===========================================================================
+
+model Category {
+  id        String    @id @default(cuid())
+  tenantId  String?
+  tenant    Tenant?   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String
+  slug      String
+  parentId  String?
+  parent    Category?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children  Category[] @relation("CategoryTree")
+  products  Product[]
+  createdAt DateTime  @default(now())
+
+  @@unique([tenantId, slug])
+  @@index([tenantId])
+}
+
+model Product {
+  id          String   @id @default(cuid())
+  tenantId    String?
+  tenant      Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  // Default/base prices. A variant may override either of them.
+  basePrice   Float    @default(0)
+  costPrice   Float    @default(0)
+  categoryId  String?
+  category    Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  // Comma separated, e.g. "Size,Color". Drives the variant option form.
+  optionNames String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  variants Variant[]
+
+  @@index([categoryId])
+  @@index([tenantId])
+}
+
+model Variant {
+  id          String  @id @default(cuid())
+  tenantId    String?
+  tenant      Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  productId   String
+  product     Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  // Free-form attribute map, e.g. {"Size":"L","Color":"Red"}
+  attributes  String  @default("{}")
+  // Human label, e.g. "Red / L". Auto-derived from attributes when omitted.
+  label       String
+  sku         String
+  barcode     String
+  // Overrides of product defaults. Null => inherit from Product.
+  costPrice   Float?
+  sellingPrice Float?
+  isDefault   Boolean @default(false)
+  lowStockThreshold Int @default(10)
+  isActive    Boolean @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  purchaseLines PurchaseLine[]
+  transferLines TransferLine[]
+  saleLines     SaleLine[]
+  returnLines   ReturnLine[]
+  adjustments   StockAdjustment[]
+  reservations  Reservation[]
+  batches       Batch[]
+  movements     StockMovement[]
+
+  @@unique([tenantId, sku])
+  @@unique([tenantId, barcode])
+  @@index([productId])
+  @@index([tenantId])
+}
+
+model Supplier {
+  id            String   @id @default(cuid())
+  tenantId      String?
+  tenant        Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  code          String
+  name          String
+  contactPerson String?
+  email         String?
+  phone         String?
+  taxId         String?
+  address       String?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  purchases Purchase[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+}
+
+// ===========================================================================
+// PURCHASES
+// ===========================================================================
+
+model Purchase {
+  id         String   @id @default(cuid())
+  tenantId   String?
+  tenant     Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  number     String
+  supplierId String
+  supplier   Supplier @relation(fields: [supplierId], references: [id])
+  // Must be a location with canReceivePurchase = true (validated in code)
+  locationId String
+  location   Location @relation(fields: [locationId], references: [id])
+  status     String   @default("draft") // draft | confirmed | cancelled
+  orderDate  DateTime @default(now())
+  expectedDate DateTime?
+  effectiveDate    DateTime @default(now())
+  backdateReason   String?
+  isBackdated      Boolean  @default(false)
+  // DRAFT | CONFIRMED | CANCELLED
+  total      Float    @default(0)
+  taxAmount  Float    @default(0)
+  notes      String?
+  createdById String
+  createdBy  User     @relation("PurchaseCreatedBy", fields: [createdById], references: [id])
+  approvedById String?
+  approvedBy User?    @relation("PurchaseApprovedBy", fields: [approvedById], references: [id])
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  lines PurchaseLine[]
+
+  @@unique([tenantId, number])
+  @@index([status])
+  @@index([locationId])
+  @@index([supplierId])
+  @@index([tenantId])
+}
+
+model PurchaseLine {
+  id            String   @id @default(cuid())
+  purchaseId    String
+  purchase      Purchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  variantId     String
+  variant       Variant  @relation(fields: [variantId], references: [id])
+  quantity      Int
+  receivedQty   Int      @default(0)
+  unitCost      Float
+  lineTotal     Float
+  batch         Batch?
+
+  @@index([purchaseId])
+  @@index([variantId])
+}
+
+// ===========================================================================
+// BATCHES (lot / FIFO costing unit)
+// ===========================================================================
+
+model Batch {
+  id           String   @id @default(cuid())
+  tenantId     String?
+  tenant       Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  code         String
+  variantId    String
+  variant      Variant  @relation(fields: [variantId], references: [id])
+  // Batches physically live at one location.
+  locationId   String
+  location     Location @relation(fields: [locationId], references: [id])
+  unitCost     Float
+  quantity     Int      @default(0) // received
+  remainingQty Int      @default(0)
+  receivedAt   DateTime @default(now())
+  expiresAt    DateTime?
+  // A batch created by a transfer keeps the origin batch's cost + date so FIFO
+  // ordering survives the move.
+  sourceBatchId String?
+  purchaseLineId String? @unique
+  purchaseLine  PurchaseLine? @relation(fields: [purchaseLineId], references: [id], onDelete: SetNull)
+  createdAt    DateTime @default(now())
+
+  movements      StockMovement[] @relation("BatchMovement")
+  sourceMovements StockMovement[] @relation("SourceBatchMovement")
+  resultMovements StockMovement[] @relation("ResultBatchMovement")
+  adjustments    StockAdjustment[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+}
+
+// ===========================================================================
+// TRANSFERS
+// ===========================================================================
+
+model StockTransfer {
+  id             String   @id @default(cuid())
+  tenantId       String?
+  tenant         Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  number         String
+  fromLocationId String
+  fromLocation   Location @relation("TransferFrom", fields: [fromLocationId], references: [id])
+  toLocationId   String
+  toLocation     Location @relation("TransferTo", fields: [toLocationId], references: [id])
+  status         String   @default("pending") // pending | in_transit | completed | cancelled
+  requestedAt    DateTime @default(now())
+  shippedAt      DateTime?
+  completedAt    DateTime?
+  effectiveDate    DateTime @default(now())
+  backdateReason   String?
+  isBackdated      Boolean  @default(false)
+  notes          String?
+  createdById    String
+  createdBy      User     @relation("TransferCreatedBy", fields: [createdById], references: [id])
+  approvedById   String?
+  approvedBy     User?    @relation("TransferApprovedBy", fields: [approvedById], references: [id])
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  lines TransferLine[]
+
+  @@unique([tenantId, number])
+  @@index([status])
+  @@index([fromLocationId])
+  @@index([toLocationId])
+  @@index([tenantId])
+}
+
+model TransferLine {
+  id          String   @id @default(cuid())
+  transferId  String
+  transfer    StockTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  variantId   String
+  variant     Variant  @relation(fields: [variantId], references: [id])
+  quantity    Int
+  receivedQty Int      @default(0)
+
+  @@index([transferId])
+  @@index([variantId])
+}
+
+// ===========================================================================
+// SALES (POS)
+// ===========================================================================
+
+model Sale {
+  id          String   @id @default(cuid())
+  tenantId    String?
+  tenant      Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  number      String
+  locationId  String
+  location    Location @relation(fields: [locationId], references: [id])
+  cashierId   String
+  cashier     User     @relation("SaleCashier", fields: [cashierId], references: [id])
+  status      String   @default("draft") // draft | completed | voided
+  customerName String?
+  customerPhone String?
+  effectiveDate    DateTime @default(now())
+  backdateReason   String?
+  isBackdated      Boolean  @default(false)
+  subtotal    Float    @default(0)
+  discountAmount Float @default(0)
+  taxAmount   Float    @default(0)
+  total       Float    @default(0)
+  amountPaid  Float    @default(0)
+  changeDue   Float    @default(0)
+  paymentMethod String  @default("cash") // cash | card | mobile_money | credit
+  // FIFO-derived cost of goods for the whole sale.
+  totalCost   Float    @default(0)
+  profit      Float    @default(0)
+  soldAt      DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  lines   SaleLine[]
+  returns Return[]
+
+  @@unique([tenantId, number])
+  @@index([locationId])
+  @@index([cashierId])
+  @@index([soldAt])
+  @@index([status])
+  @@index([tenantId])
+}
+
+model SaleLine {
+  id           String  @id @default(cuid())
+  saleId       String
+  sale         Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  variantId    String
+  variant      Variant @relation(fields: [variantId], references: [id])
+  quantity     Int
+  unitCost     Float   // weighted-average FIFO cost of the batches consumed
+  unitPrice    Float   // list selling price
+  discountAmount Float @default(0)
+  actualPrice  Float   // price actually charged per unit
+  lineTotal    Float
+  lineCost     Float
+  lineProfit   Float
+
+  @@index([saleId])
+  @@index([variantId])
+}
+
+// ===========================================================================
+// RETURNS
+// ===========================================================================
+
+model Return {
+  id         String   @id @default(cuid())
+  tenantId   String?
+  tenant     Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  number     String
+  saleId     String?
+  sale       Sale?    @relation(fields: [saleId], references: [id], onDelete: SetNull)
+  locationId String
+  location   Location @relation(fields: [locationId], references: [id])
+  reason     String   @default("customer_return")
+  status     String   @default("draft") // draft | completed | cancelled
+  totalRefund Float   @default(0)
+  createdById String
+  createdBy  User     @relation("ReturnCreatedBy", fields: [createdById], references: [id])
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  lines ReturnLine[]
+
+  @@unique([tenantId, number])
+  @@index([saleId])
+  @@index([locationId])
+  @@index([tenantId])
+}
+
+model ReturnLine {
+  id        String  @id @default(cuid())
+  returnId  String
+  return    Return  @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  variantId String
+  variant   Variant @relation(fields: [variantId], references: [id])
+  quantity  Int
+  // sellable => return_in to the sale location; damaged => return_damaged to
+  // the damaged location (or discarded if none exists).
+  condition String  @default("sellable")
+  refundAmount Float @default(0)
+  unitCost  Float   @default(0)
+
+  @@index([returnId])
+  @@index([variantId])
+}
+
+// ===========================================================================
+// ADJUSTMENTS (stock count corrections, damage, theft, expiry, ...)
+// ===========================================================================
+
+model StockAdjustment {
+  id         String   @id @default(cuid())
+  tenantId   String?
+  tenant     Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  number     String
+  variantId  String
+  variant    Variant? @relation(fields: [variantId], references: [id], onDelete: NoAction)
+  locationId String
+  location   Location @relation(fields: [locationId], references: [id])
+  batchId    String?
+  batch      Batch?   @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  // DAMAGED | THEFT | EXPIRED | MISPLACED | COUNT_CORRECTION
+  reason     String
+  // Negative = write-off, positive = found stock
+  quantity   Int
+  notes      String?
+  status     String   @default("pending") // pending | approved | rejected
+  createdById String
+  createdBy  User?    @relation("AdjustmentCreatedBy", fields: [createdById], references: [id], onDelete: NoAction)
+  approvedById String?
+  approvedBy User?    @relation("AdjustmentApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([tenantId, number])
+  @@index([status])
+  @@index([locationId])
+  @@index([variantId])
+  @@index([tenantId])
+}
+
+// ===========================================================================
+// RESERVATIONS
+// ===========================================================================
+
+model Reservation {
+  id          String   @id @default(cuid())
+  tenantId    String?
+  tenant      Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  number      String
+  variantId   String
+  variant     Variant  @relation(fields: [variantId], references: [id])
+  locationId  String
+  location    Location @relation(fields: [locationId], references: [id])
+  quantity    Int
+  customerRef String?
+  status      String   @default("active") // active | released | fulfilled | expired
+  createdById String?
+  createdBy   User?    @relation("ReservationCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime?
+
+  movements StockMovement[]
+
+  @@unique([tenantId, number])
+  @@index([status])
+  @@index([variantId, locationId])
+  @@index([tenantId])
+}
+
+// ===========================================================================
+// STOCK MOVEMENT LEDGER  --  THE SOURCE OF TRUTH
+// ===========================================================================
+
+model StockMovement {
+  id         String   @id @default(cuid())
+  tenantId   String?
+  tenant     Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // PURCHASE_IN | TRANSFER_OUT | TRANSFER_IN | SALE_OUT | RETURN_IN |
+  // RETURN_DAMAGED | RESERVATION | RESERVATION_RELEASE | ADJUSTMENT
+  type       String
+  variantId  String
+  variant    Variant  @relation(fields: [variantId], references: [id])
+  locationId String
+  location   Location @relation(fields: [locationId], references: [id])
+  // Backdating support
+  effectiveDate    DateTime @default(now())
+  backdateReason   String?  // forgot_to_record | system_offline | manual_correction | other
+  isBackdated      Boolean  @default(false)
+  batchId    String?
+  batch      Batch?   @relation("BatchMovement", fields: [batchId], references: [id], onDelete: SetNull)
+  sourceBatchId String?
+  sourceBatch Batch?  @relation("SourceBatchMovement", fields: [sourceBatchId], references: [id], onDelete: SetNull)
+  resultingBatchId String?
+  resultingBatch Batch? @relation("ResultBatchMovement", fields: [resultingBatchId], references: [id], onDelete: SetNull)
+  // Signed. Positive = stock in, negative = stock out.
+  quantity   Int
+  // AVAILABLE | RESERVED | SOLD
+  status     String   @default("available")
+  // DAMAGED | THEFT | EXPIRED | MISPLACED | COUNT_CORRECTION (adjustments only)
+  adjustmentReason String?
+  unitCost   Float?
+  totalCost  Float?
+  approvedById String?
+  approvedBy User?    @relation("MovementApprovedBy", fields: [approvedById], references: [id])
+  // e.g. "Purchase:po-00012", "Sale:sale-00042"
+  referenceType String?
+  referenceId String?
+  referenceLabel String?
+  reservationId String?
+  reservation Reservation? @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+  notes      String?
+  createdById String?
+  createdBy  User?    @relation("MovementCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt  DateTime @default(now())
+
+  @@index([variantId, locationId, status])
+  @@index([locationId, createdAt])
+  @@index([type])
+  @@index([batchId])
+  @@index([referenceId])
+  @@index([createdAt])
+  @@index([tenantId])
+}
+
+// ===========================================================================
+// AUDIT LOG  --  system activity, append-only, read-only through the app
+// ===========================================================================
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  tenantId   String?
+  tenant     Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userEmail  String?
+  userRole   String?
+  // create | update | delete | login | logout | confirm | approve | reject
+  action     String
+  entityType String
+  entityId   String?
+  entityLabel String?
+  before     String?
+  after      String?
+  ipAddress  String?
+  userAgent  String?
+  metadata   String?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([userId])
+  @@index([createdAt])
+  @@index([action])
+  @@index([tenantId])
+}

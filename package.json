@@ -1,0 +1,43 @@
+{
+  "name": "warehouse-retail-inventory",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Full-stack Inventory Management System: Purchase -> Warehouse -> Transfer -> Retail Store -> POS -> Reports & Audit",
+  "scripts": {
+    "dev": "next dev -H 0.0.0.0 -p 3004",
+    "build": "prisma generate && next build",
+    "start": "next start -H 0.0.0.0 -p 3004",
+    "typecheck": "tsc --noEmit",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:studio": "prisma studio",
+    "setup": "prisma generate && prisma migrate dev && tsx prisma/seed.ts",
+    "verify:ledger": "tsx prisma/verify-ledger.ts",
+    "test:e2e": "bash scripts/e2e.sh",
+    "test": "npm run typecheck && npm run verify:ledger"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.16.0",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2",
+    "next": "^15.5.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/jsonwebtoken": "^9.0.7",
+    "@types/node": "^20.16.0",
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.47",
+    "prisma": "^6.16.0",
+    "tailwindcss": "^3.4.13",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.2"
+  }
+}

@@ -1,0 +1,43 @@
+# ---------------------------------------------------------------------------
+# Local / staging parity: PostgreSQL + the app.
+#
+#   docker compose up --build
+#   -> http://localhost:3004
+#
+# The app applies tracked migrations with `prisma migrate deploy` on boot and
+# auto-seeds the demo dataset only when the DB is empty AND AUTO_SEED=1.
+# For a real deployment set AUTO_SEED=0 and a real JWT_SECRET.
+# ---------------------------------------------------------------------------
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: inventory
+      POSTGRES_PASSWORD: inventory
+      POSTGRES_DB: inventory
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U inventory -d inventory']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://inventory:inventory@db:5432/inventory?schema=public
+      JWT_SECRET: change-me-in-any-real-deployment
+      JWT_EXPIRES_IN: 12h
+      NEXT_PUBLIC_CURRENCY: TZS
+      AUTO_SEED: '1'
+    ports:
+      - '3004:3004'
+
+volumes:
+  pgdata:
