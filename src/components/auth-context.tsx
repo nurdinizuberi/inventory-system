@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/client';
+import { useInactivitySignout } from '@/components/use-inactivity-signout';
 
 export interface SessionLocation {
   id: string;
@@ -73,6 +74,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     router.push('/login');
     router.refresh();
   }, [router]);
+
+  // Sign out automatically after a period of inactivity.
+  useInactivitySignout(
+    () => {
+      void logout();
+    },
+    { enabled: !!user },
+  );
 
   const value = useMemo<AuthState>(
     () => ({

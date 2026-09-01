@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/components/auth-context';
+import { PasswordInput } from '@/components/password-input';
 import { ThemeToggle } from '@/components/theme-context';
 import { errorMessage } from '@/lib/client';
 
@@ -78,14 +79,7 @@ export default function LoginPage() {
             </label>
             <label className="block">
               <span className="label">Password</span>
-              <input
-                className="input"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete="current-password"
-                required
-              />
+              <PasswordInput value={password} onChange={setPassword} required />
             </label>
             {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/30 dark:text-red-300">{error}</p>}
             <button className="btn-primary w-full" disabled={busy} type="submit">

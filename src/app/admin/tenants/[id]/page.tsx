@@ -143,7 +143,11 @@ export default function TenantDetailPage() {
                 <tbody>
                   {tenant.users.map((user) => (
                     <tr key={user.id}>
-                      <td className="font-medium text-ink-900 dark:text-ink-100">{user.name}</td>
+                      <td>
+                        <Link href={`/admin/users/${user.id}`} className="font-medium text-violet-700 hover:underline dark:text-violet-300">
+                          {user.name}
+                        </Link>
+                      </td>
                       <td className="text-sm text-ink-500 dark:text-ink-400">{user.email}</td>
                       <td className="text-sm text-ink-600 dark:text-ink-300">{user.role}</td>
                       <td>
