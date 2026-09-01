@@ -5,6 +5,9 @@ import { prisma } from '@/lib/db';
 import { requireAdmin } from '@/lib/admin-auth';
 import { badRequest, conflict, jsonError } from '@/lib/rbac';
 import { SYSTEM_ROLES } from '@/lib/rbac';
+import { getAppBaseUrl } from '@/lib/app-url';
+import { sendEmail } from '@/lib/email';
+import { issueVerificationForEmail } from '@/lib/tokens';
 
 const createSchema = z.object({
   name: z.string().min(2, 'Organization name is required'),
@@ -117,6 +120,23 @@ export async function POST(request: Request) {
 
       return { tenant, adminUser, roleCount: Object.keys(roleMap).length };
     });
+
+    // Fire-and-forget verification email for the new tenant admin.
+    void (async () => {
+      try {
+        const verified = await issueVerificationForEmail(result.adminUser.email);
+        if (verified) {
+          const link = `${await getAppBaseUrl()}/verify-email?token=${verified.token}`;
+          await sendEmail({
+            to: verified.user.email,
+            subject: 'Verify your MindBoxAfrica account email',
+            html: `<p>Welcome to MindBoxAfrica. Verify your email to activate your admin account:</p><p><a href="${link}">${link}</a></p>`,
+          });
+        }
+      } catch {
+        /* noop */
+      }
+    })();
 
     return NextResponse.json(
       {

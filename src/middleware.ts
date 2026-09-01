@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { tenantSlugFromHost } from './lib/app-domain';
 
 /**
  * Next.js middleware — runs on every request.
@@ -16,39 +17,40 @@ export function middleware(request: NextRequest) {
   const host = request.headers.get('host') ?? '';
   const hostname = host.split(':')[0];
 
+  const requestId = request.headers.get('x-vercel-id') || randomId();
+
   // Skip tenant resolution for the admin portal and health checks
   if (
     url.pathname.startsWith('/admin') ||
     url.pathname.startsWith('/api/admin') ||
     url.pathname === '/api/health'
   ) {
-    return NextResponse.next();
+    return withRequestId(requestId);
   }
 
-  // Extract subdomain from host
-  // Production: acme.yourapp.com → "acme"
-  // Development: acme.localhost → "acme"  OR  localhost:3000 → null
-  // Vercel's *.vercel.app domains are always treated as bare (no tenant).
-  const parts = hostname.split('.');
-  let tenantSlug: string | null = null;
+  // Extract subdomain from host. See tenantSlugFromHost() — a real
+  // APP_BASE_DOMAIN + wildcard behaves like Vercel's bare *.vercel.app.
+  const tenantSlug = tenantSlugFromHost(hostname);
 
-  if (hostname.endsWith('.vercel.app')) {
-    tenantSlug = null;
-  } else if (parts.length >= 3) {
-    // Production: subdomain.example.com
-    tenantSlug = parts[0];
-  } else if (parts.length === 2 && parts[1] === 'localhost') {
-    // Dev: subdomain.localhost
-    tenantSlug = parts[0];
-  }
-
-  // Forward tenant slug as a header for downstream resolution
+  // Forward tenant slug + a request id as headers for downstream resolution /
+  // correlation of structured logs.
   const response = NextResponse.next();
   if (tenantSlug) {
     response.headers.set('x-tenant-slug', tenantSlug);
   }
+  response.headers.set('x-request-id', requestId);
 
   return response;
+}
+
+function withRequestId(requestId: string) {
+  const response = NextResponse.next();
+  response.headers.set('x-request-id', requestId);
+  return response;
+}
+
+function randomId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 export const config = {

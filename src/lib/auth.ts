@@ -2,6 +2,7 @@ import jwt from 'jsonwebtoken';
 import { cookies, headers } from 'next/headers';
 import { prisma } from './db';
 import { sessionSecret } from './secrets';
+import { tenantSlugFromHost } from './app-domain';
 import type { Role } from './types';
 
 export const SESSION_COOKIE = 'ims_session';
@@ -127,22 +128,7 @@ export async function resolveTenant(slug: string) {
 export async function extractSubdomain(): Promise<string | null> {
   const h = await headers();
   const host = h.get('host') ?? '';
-  const hostname = host.split(':')[0];
-
-  // Skip IP addresses (e.g. 127.0.0.1, 192.168.1.1)
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(hostname)) return null;
-  // Skip plain localhost (no subdomain)
-  if (hostname === 'localhost' || hostname.endsWith('.localhost')) return null;
-  // Skip Vercel's *.vercel.app domains — the first label is a deployment hash,
-  // not a tenant slug, so there's no meaningful subdomain.
-  if (hostname.endsWith('.vercel.app')) return null;
-
-  const parts = hostname.split('.');
-  // For production: subdomain.yourapp.com → subdomain
-  if (parts.length >= 3) return parts[0];
-  // For development with subdomains like acme.localhost
-  if (parts.length === 2 && parts[1] === 'localhost') return parts[0];
-  return null;
+  return tenantSlugFromHost(host);
 }
 
 /**

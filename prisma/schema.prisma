@@ -97,6 +97,15 @@ model User {
   roleId       String?  // FK to Role model for DB-backed permissions
   roleRef      Role?    @relation(fields: [roleId], references: [id])
   isActive     Boolean  @default(true)
+
+  // Self-service password reset (hashed token + expiry).
+  passwordResetTokenHash     String?
+  passwordResetTokenExpiresAt DateTime?
+
+  // Email verification. Token is hashed; clearing it confirms the address.
+  emailVerifiedAt            DateTime?
+  emailVerificationTokenHash String?
+
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

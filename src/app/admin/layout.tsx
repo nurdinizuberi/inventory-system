@@ -219,6 +219,11 @@ function AdminLoginPage() {
             <button className="btn-primary w-full" disabled={busy} type="submit">
               {busy ? 'Signing in…' : 'Sign in'}
             </button>
+            <p className="text-center text-sm">
+              <Link href="/admin/forgot-password" className="text-violet-700 hover:underline dark:text-violet-300">
+                Forgot password?
+              </Link>
+            </p>
           </form>
         </div>
       </div>

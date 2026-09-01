@@ -290,6 +290,13 @@ installer.
    | `JWT_EXPIRES_IN` | no | defaults to `12h` |
    | `NEXT_PUBLIC_CURRENCY` | no | build-time, defaults to `TZS` |
    | `AUTO_SEED` | set to `0` | keeps demo data off a production database |
+   | `NEXT_PUBLIC_APP_URL` | no | canonical origin used to build absolute links in emails (defaults to the request `Host`) |
+   | `RESEND_API_KEY` | no | enables transactional email (password reset, email verification) via Resend |
+   | `EMAIL_FROM` | no | sender line; defaults to `MindBoxAfrica <no-reply@mindboxafrica.vercel.app>` |
+   | `EMAIL_PROVIDER` | no | `resend` (default when a key is set) or `console` to print instead of send |
+   | `REQUIRE_EMAIL_VERIFICATION` | no | `1` to block sign-in until the email address is confirmed |
+   | `APP_BASE_DOMAIN` | no | your apex domain (e.g. `mindboxafrica.com`) once you move off `*.vercel.app`; apex/www are bare, subdomains are tenants |
+   | `ERROR_WEBHOOK_URL` | no | if set, server errors are POSTed here (Slack/Zapier/custom endpoint) alongside structured JSON logs |
 4. **Multi-tenant subdomains** — each tenant is a subdomain (`acme.yourdomain.com`); the
    middleware reads the `Host` header and forwards the subdomain as `x-tenant-slug`. Add your
    **apex domain** plus **`*.yourdomain.com`** as Vercel domains (Vercel handles wildcard DNS

@@ -5,6 +5,7 @@ import { SESSION_COOKIE, extractSubdomain, requestMeta, resolveTenant, signSessi
 import { bootstrapDatabase, prisma } from '@/lib/db';
 import { audit } from '@/lib/audit';
 import { assertNotLocked, clearFailures, LoginRateLimitedError, recordFailure } from '@/lib/rate-limit';
+import { logInfo } from '@/lib/log';
 import type { Role } from '@/lib/types';
 
 const schema = z.object({
@@ -94,6 +95,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid email or password' }, { status: 401 });
   }
 
+  // Optional email-verification gate. When enabled, an unverified account may
+  // not sign in until the address is confirmed.
+  if (process.env.REQUIRE_EMAIL_VERIFICATION === '1' && !user.emailVerifiedAt) {
+    await logAttempt(false, 'email not verified');
+    return NextResponse.json(
+      { error: 'Please verify your email address before signing in.' },
+      { status: 403 },
+    );
+  }
+
   await clearFailures(retryKey);
 
   const locationIds = user.assignments.map((a) => a.locationId);
@@ -108,6 +119,7 @@ export async function POST(request: Request) {
   });
 
   await logAttempt(true);
+  logInfo('login ok', { email, user: user.id, tenantId, ip: meta.ip });
 
   const response = NextResponse.json({
     user: {

@@ -5,6 +5,9 @@ import { audit } from '@/lib/audit';
 import { prisma } from '@/lib/db';
 import { badRequest, guard, jsonError } from '@/lib/rbac';
 import { ROLES } from '@/lib/types';
+import { getAppBaseUrl } from '@/lib/app-url';
+import { sendEmail } from '@/lib/email';
+import { issueVerificationForEmail } from '@/lib/tokens';
 
 const schema = z.object({
   name: z.string().min(2),
@@ -103,6 +106,24 @@ export async function POST(request: Request) {
         locations: user.assignments.map((a) => a.location.name),
       },
     });
+
+    // Fire-and-forget verification email — a mail failure must not block the
+    // user creation.
+    void (async () => {
+      try {
+        const verified = await issueVerificationForEmail(user.email);
+        if (verified) {
+          const link = `${await getAppBaseUrl()}/verify-email?token=${verified.token}`;
+          await sendEmail({
+            to: verified.user.email,
+            subject: 'Verify your MindBoxAfrica account email',
+            html: `<p>Confirm your email to activate your account:</p><p><a href="${link}">${link}</a></p>`,
+          });
+        }
+      } catch {
+        /* noop */
+      }
+    })();
 
     return NextResponse.json({ user: { id: user.id, name: user.name, email: user.email, role: user.role } }, { status: 201 });
   } catch (err) {

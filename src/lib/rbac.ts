@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { AuthError, getSessionUser, requestMeta, type SessionUser } from './auth';
 import { prisma } from './db';
+import { logError } from './log';
 import type { Role } from './types';
 
 // ---------------------------------------------------------------------------
@@ -352,8 +353,8 @@ export function jsonError(err: unknown) {
     return NextResponse.json({ error: err.message }, { status: err.status });
   }
   const message = err instanceof Error ? err.message : 'Unexpected server error';
-  console.error('[api]', err);
-  return NextResponse.json({ error: message }, { status: 500 });
+  logError('api error', {}, err);
+  return NextResponse.json({ error: 'Unexpected server error' }, { status: 500 });
 }
 
 export function badRequest(message: string) {

@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/components/auth-context';
@@ -90,6 +91,11 @@ export default function LoginPage() {
             <button className="btn-primary w-full" disabled={busy} type="submit">
               {busy ? 'Signing in…' : 'Sign in'}
             </button>
+            <p className="text-center text-sm text-ink-600 dark:text-ink-300">
+              <Link href="/forgot-password" className="text-violet-700 hover:underline dark:text-violet-300">
+                Forgot password?
+              </Link>
+            </p>
           </form>
         </div>
       </div>
