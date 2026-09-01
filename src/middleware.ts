@@ -28,10 +28,13 @@ export function middleware(request: NextRequest) {
   // Extract subdomain from host
   // Production: acme.yourapp.com → "acme"
   // Development: acme.localhost → "acme"  OR  localhost:3000 → null
+  // Vercel's *.vercel.app domains are always treated as bare (no tenant).
   const parts = hostname.split('.');
   let tenantSlug: string | null = null;
 
-  if (parts.length >= 3) {
+  if (hostname.endsWith('.vercel.app')) {
+    tenantSlug = null;
+  } else if (parts.length >= 3) {
     // Production: subdomain.example.com
     tenantSlug = parts[0];
   } else if (parts.length === 2 && parts[1] === 'localhost') {

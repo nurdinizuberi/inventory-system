@@ -6,20 +6,11 @@ import { useAuth } from '@/components/auth-context';
 import { ThemeToggle } from '@/components/theme-context';
 import { errorMessage } from '@/lib/client';
 
-const DEMO_ACCOUNTS = [
-  { email: 'admin@ims.tz', password: 'admin123', role: 'Admin', note: 'Full access, incl. audit log' },
-  { email: 'wh.manager@ims.tz', password: 'warehouse123', role: 'Warehouse Manager', note: 'Purchases + transfers, no POS' },
-  { email: 'store.mbezi@ims.tz', password: 'store123', role: 'Store Manager', note: 'POS at Mbezi Beach only' },
-  { email: 'store.kariakoo@ims.tz', password: 'store123', role: 'Store Manager', note: 'POS at Kariakoo only' },
-  { email: 'cashier@ims.tz', password: 'cashier123', role: 'Cashier', note: 'Sells only, own tickets only' },
-  { email: 'auditor@ims.tz', password: 'audit123', role: 'Auditor', note: 'Read-only everywhere' },
-];
-
 export default function LoginPage() {
   const { login, user, loading } = useAuth();
   const router = useRouter();
-  const [email, setEmail] = useState('admin@ims.tz');
-  const [password, setPassword] = useState('admin123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -70,7 +61,7 @@ export default function LoginPage() {
         <div className="w-full max-w-sm">
           <p className="text-sm font-semibold text-ink-900 dark:text-ink-100">MindBoxAfrica</p>
           <h2 className="text-lg font-semibold text-ink-900 dark:text-ink-100">Sign in</h2>
-          <p className="muted mt-1">Use one of the demo accounts below, or your own credentials.</p>
+          <p className="muted mt-1">Sign in with your credentials.</p>
 
           <form className="mt-6 space-y-4" onSubmit={submit}>
             <label className="block">
@@ -100,29 +91,6 @@ export default function LoginPage() {
               {busy ? 'Signing in…' : 'Sign in'}
             </button>
           </form>
-
-          <div className="mt-8">
-            <p className="label">Demo accounts — click to fill</p>
-            <div className="space-y-1.5">
-              {DEMO_ACCOUNTS.map((account) => (
-                <button
-                  key={account.email}
-                  type="button"
-                  onClick={() => {
-                    setEmail(account.email);
-                    setPassword(account.password);
-                  }}
-                  className="flex w-full items-center justify-between gap-3 rounded-lg border border-ink-200 px-3 py-2 text-left text-xs transition hover:border-ink-400 hover:bg-ink-50 dark:border-ink-700 dark:hover:border-ink-500 dark:hover:bg-ink-800/50"
-                >
-                  <span>
-                    <span className="font-medium text-ink-900 dark:text-ink-100">{account.role}</span>
-                    <span className="block text-ink-500 dark:text-ink-400">{account.note}</span>
-                  </span>
-                  <span className="font-mono text-ink-400 dark:text-ink-400/80">{account.password}</span>
-                </button>
-              ))}
-            </div>
-          </div>
         </div>
       </div>
     </div>

@@ -132,7 +132,10 @@ export async function extractSubdomain(): Promise<string | null> {
   // Skip IP addresses (e.g. 127.0.0.1, 192.168.1.1)
   if (/^\d{1,3}(\.\d{1,3}){3}$/.test(hostname)) return null;
   // Skip plain localhost (no subdomain)
-  if (hostname === 'localhost') return null;
+  if (hostname === 'localhost' || hostname.endsWith('.localhost')) return null;
+  // Skip Vercel's *.vercel.app domains — the first label is a deployment hash,
+  // not a tenant slug, so there's no meaningful subdomain.
+  if (hostname.endsWith('.vercel.app')) return null;
 
   const parts = hostname.split('.');
   // For production: subdomain.yourapp.com → subdomain

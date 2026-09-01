@@ -12,3 +12,5 @@ prisma/*.db
 prisma/*.db-journal
 .DS_Store
 tsconfig.tsbuildinfo
+.vercel
+.env*
