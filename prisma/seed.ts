@@ -5,6 +5,11 @@ import { DEMO_PASSWORD_NOTE, seedDatabase } from './seed-data';
 const prisma = new PrismaClient();
 
 async function main() {
+  if (process.env.NODE_ENV === 'production' && process.env.SEED_IN_PRODUCTION !== '1') {
+    // eslint-disable-next-line no-console
+    console.log('[seed] skipped (production — set SEED_IN_PRODUCTION=1 to force)');
+    return;
+  }
   if (process.env.AUTO_SEED === '0') {
     // eslint-disable-next-line no-console
     console.log('[seed] skipped (AUTO_SEED=0)');

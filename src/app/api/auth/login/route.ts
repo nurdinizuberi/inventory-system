@@ -34,7 +34,7 @@ export async function POST(request: Request) {
   const meta = await requestMeta();
   const retryKey = `${email.toLowerCase()}|${meta.ip ?? 'unknown'}`;
   try {
-    assertNotLocked(retryKey);
+    await assertNotLocked(retryKey);
   } catch (err) {
     if (err instanceof LoginRateLimitedError) {
       return NextResponse.json({ error: err.message }, { status: 429, headers: { 'Retry-After': String(err.retryAfterSeconds) } });
@@ -82,19 +82,19 @@ export async function POST(request: Request) {
   };
 
   if (!user || !user.isActive) {
-    recordFailure(retryKey);
+    await recordFailure(retryKey);
     await logAttempt(false, 'unknown or inactive user');
     return NextResponse.json({ error: 'Invalid email or password' }, { status: 401 });
   }
 
   const valid = await bcrypt.compare(password, user.passwordHash);
   if (!valid) {
-    recordFailure(retryKey);
+    await recordFailure(retryKey);
     await logAttempt(false, 'bad password');
     return NextResponse.json({ error: 'Invalid email or password' }, { status: 401 });
   }
 
-  clearFailures(retryKey);
+  await clearFailures(retryKey);
 
   const locationIds = user.assignments.map((a) => a.locationId);
   const token = signSession({

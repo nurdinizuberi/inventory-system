@@ -34,7 +34,9 @@ if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma;
 export async function bootstrapDatabase(): Promise<void> {
   if (globalForPrisma.seeded) return;
   globalForPrisma.seeded = true;
-  if (process.env.AUTO_SEED === '0') return;
+  // Never auto-seed demo data on a production database, regardless of how the
+  // host injects env vars. Seeding is for local/dev/demo only.
+  if (process.env.NODE_ENV === 'production' || process.env.AUTO_SEED === '0') return;
   try {
     await ensureSeeded(prisma);
   } catch (err) {

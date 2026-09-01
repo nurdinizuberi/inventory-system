@@ -119,6 +119,21 @@ model User {
   @@unique([tenantId, email])
 }
 
+// ===========================================================================
+// AUTH & SECURITY
+// ===========================================================================
+
+// DB-backed login throttling. Works across ephemeral/serverless runtimes where
+// in-memory state is meaningless (Vercel, Namecheap, Hostinger, etc.).
+model LoginAttempt {
+  id          String   @id @default(cuid())
+  key         String // "email|ip" — bucketed per key
+  failed      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  @@index([key, createdAt])
+}
+
 model UserLocation {
   id        String   @id @default(cuid())
   userId    String
