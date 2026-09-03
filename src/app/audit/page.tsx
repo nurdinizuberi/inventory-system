@@ -53,6 +53,8 @@ export default function AuditPage() {
   const [logs, setLogs] = useState<AuditEntry[]>([]);
   const [entityTypes, setEntityTypes] = useState<{ value: string; count: number }[]>([]);
   const [actions, setActions] = useState<{ value: string; count: number }[]>([]);
+  const [users, setUsers] = useState<{ id: string; email: string; count: number }[]>([]);
+  const [userId, setUserId] = useState('');
   const [total, setTotal] = useState(0);
   const [entityType, setEntityType] = useState('');
   const [action, setAction] = useState('');
@@ -65,26 +67,29 @@ export default function AuditPage() {
     return () => clearTimeout(timer);
   }, [query]);
 
-  const load = useCallback(async () => {
-    try {
-      const params = new URLSearchParams();
-      if (entityType) params.set('entityType', entityType);
-      if (action) params.set('action', action);
-      if (debouncedQuery.trim()) params.set('q', debouncedQuery.trim());
-      const data = await api.get<{
-        logs: AuditEntry[];
-        entityTypes: { value: string; count: number }[];
-        actions: { value: string; count: number }[];
-        total: number;
-      }>(`/api/audit?${params.toString()}`);
-      setLogs(data.logs);
-      setEntityTypes(data.entityTypes);
-      setActions(data.actions);
-      setTotal(data.total);
-    } catch (err) {
-      toast.push('error', errorMessage(err));
-    }
-  }, [entityType, action, debouncedQuery, toast]);
+    const load = useCallback(async () => {
+      try {
+        const params = new URLSearchParams();
+        if (entityType) params.set('entityType', entityType);
+        if (action) params.set('action', action);
+        if (userId) params.set('userId', userId);
+        if (debouncedQuery.trim()) params.set('q', debouncedQuery.trim());
+        const data = await api.get<{
+          logs: AuditEntry[];
+          entityTypes: { value: string; count: number }[];
+          actions: { value: string; count: number }[];
+          users: { id: string; email: string; count: number }[];
+          total: number;
+        }>(`/api/audit?${params.toString()}`);
+        setLogs(data.logs);
+        setEntityTypes(data.entityTypes);
+        setActions(data.actions);
+        setUsers(data.users ?? []);
+        setTotal(data.total);
+      } catch (err) {
+        toast.push('error', errorMessage(err));
+      }
+    }, [entityType, action, userId, debouncedQuery, toast]);
 
   useEffect(() => {
     void load();
@@ -137,6 +142,14 @@ export default function AuditPage() {
               {actions.map((item) => (
                 <option key={item.value} value={item.value}>
                   {item.value} ({item.count})
+                </option>
+              ))}
+            </select>
+            <select className="input w-52" value={userId} onChange={(e) => setUserId(e.target.value)}>
+              <option value="">All users</option>
+              {users.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.email} ({u.count})
                 </option>
               ))}
             </select>

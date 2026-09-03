@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { audit } from '@/lib/audit';
 import { prisma } from '@/lib/db';
 import { badRequest, guard, jsonError } from '@/lib/rbac';
+import { getStockMatrix } from '@/lib/stock';
 import { generateBarcode, generateSku } from '@/lib/utils';
 
 const createSchema = z.object({
@@ -27,18 +28,60 @@ const createSchema = z.object({
     .default([]),
 });
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const ctx = await guard({ action: 'product.view' });
+    const url = new URL(request.url);
+    const status = url.searchParams.get('status'); // 'active' (default) | 'archived' | 'all'
+    const isActive =
+      status === 'archived'
+        ? false
+        : status === 'all'
+          ? undefined
+          : true;
+
     const products = await prisma.product.findMany({
-      where: { isActive: true, ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}) },
+      where: {
+        ...(isActive !== undefined ? { isActive } : {}),
+        ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}),
+      },
       include: {
         category: true,
-        variants: { where: { isActive: true }, orderBy: { label: 'asc' } },
+        variants: { orderBy: { label: 'asc' } },
       },
       orderBy: { name: 'asc' },
     });
-    return NextResponse.json({ products });
+
+    // Derive a per-variant on-hand total so the list can show quantity without
+    // a stored figure — the ledger is the only source of truth.
+    const variantIds = products.flatMap((p) => p.variants.map((v) => v.id));
+    const matrix = variantIds.length ? await getStockMatrix(prisma, { variantIds }) : [];
+    const onHandByVariant = new Map<string, number>();
+    const sellableByVariant = new Map<string, number>();
+    const reservedByVariant = new Map<string, number>();
+    const stockByVariant = new Map<string, { locationId: string; onHand: number; sellable: number; reserved: number }[]>();
+    for (const row of matrix) {
+      onHandByVariant.set(row.variantId, (onHandByVariant.get(row.variantId) ?? 0) + row.onHand);
+      sellableByVariant.set(row.variantId, (sellableByVariant.get(row.variantId) ?? 0) + row.sellable);
+      reservedByVariant.set(row.variantId, (reservedByVariant.get(row.variantId) ?? 0) + row.reserved);
+      const list = stockByVariant.get(row.variantId) ?? [];
+      list.push({ locationId: row.locationId, onHand: row.onHand, sellable: row.sellable, reserved: row.reserved });
+      stockByVariant.set(row.variantId, list);
+    }
+
+    const items = products.map((p) => ({
+      ...p,
+      variants: p.variants.map((v) => ({
+        ...v,
+        onHand: onHandByVariant.get(v.id) ?? 0,
+        sellable: sellableByVariant.get(v.id) ?? 0,
+        reserved: reservedByVariant.get(v.id) ?? 0,
+        stock: stockByVariant.get(v.id) ?? [],
+      })),
+      totalOnHand: p.variants.reduce((s, v) => s + (onHandByVariant.get(v.id) ?? 0), 0),
+    }));
+
+    return NextResponse.json({ products: items });
   } catch (err) {
     return jsonError(err);
   }

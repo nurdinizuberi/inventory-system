@@ -149,8 +149,8 @@ store's own manager books the goods in.
 ## Multi-tenancy
 
 Every entity the business touches — users, roles, locations, products, variants, batches, sales,
-purchases, transfers, returns, adjustments and **every ledger row** — carries a `tenantId`.
-Tenant isolation is enforced consistently:
+purchases, transfers, returns, adjustments and **every ledger row and audit entry** — carries a
+`tenantId`. Tenant isolation is enforced consistently:
 
 - sessions are JWTs in an httpOnly cookie, minted against exactly one tenant, whose id is stamped
   on every row the session writes (`tenantId` is propagated to the movement ledger, so even
@@ -194,6 +194,34 @@ They are different things and deliberately separate:
 
 The audit log has no update or delete path anywhere in the app; `src/app/api/audit/route.ts` only
 ever performs a `SELECT`. Visible to Admin and Auditor only.
+
+Every audit entry is stamped with the tenant it was written for, and the audit endpoint is scoped
+to the current tenant on read — so an organization can **only ever see its own audit logs**, never
+another organization's activity. The audit page also has filters for entity type, action and a
+**user filter**, so you can pull up everything one person did (for example, hold one user
+accountable for a change a shared login made).
+
+**Archived (inactive) products** still appear exactly where they should: they hold no active
+inventory but their historical ledger rows, batches, sales and purchases all remain intact, and
+their audit trail is preserved. Archiving never destroys business data.
+
+---
+
+## Products, variants, categories & stock on hand
+
+- **Categories are fully user-managed.** Create them inline while adding a product (the “+ New”
+  button next to the category picker), or open **Manage categories** to add, rename or delete them.
+  A category with products still assigned cannot be deleted — reassign or archive those products
+  first.
+- **Editing a product** opens the same form used to create one: name, description, category,
+  prices, option names, and per-variant SKU/barcode/cost/price/low-stock. Every change is audited.
+  If your role lacks `variant.update`, you can still edit the product-level fields.
+- **Stock is displayed, never stored.** The product list shows a **Total on hand** column, and
+  expanding a product reveals each variant’s on-hand/sellable/reserved breakdown per location, all
+  derived in real time from the movement ledger.
+- **Archiving is reversible.** Archive a product to withdraw it (and its variants) from lists and
+  the POS. Switch to the **Archived** tab to see what you removed and **Restore** it at any time —
+  its stock, batches and history come straight back undamaged.
 
 ---
 
