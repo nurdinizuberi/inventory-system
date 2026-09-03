@@ -45,6 +45,13 @@ interface Category {
   children?: { id: string }[];
 }
 
+interface Location {
+  id: string;
+  name: string;
+  type: string;
+  canReceivePurchase: boolean;
+}
+
 const EMPTY_FORM = {
   name: '',
   description: '',
@@ -52,9 +59,11 @@ const EMPTY_FORM = {
   costPrice: 0,
   categoryId: '',
   optionNames: 'Size,Color',
+  openingQuantity: 0,
+  openingLocationId: '',
 };
 
-const EMPTY_VARIANT = { label: '', cost: '', price: '', lowStock: 10 };
+const EMPTY_VARIANT = { label: '', cost: '', price: '', lowStock: 10, quantity: 0, locationId: '' };
 
 interface VariantEdit {
   id: string;
@@ -72,12 +81,14 @@ export default function ProductsPage() {
   const toast = useToast();
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [locations, setLocations] = useState<Location[]>([]);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [variantDrafts, setVariantDrafts] = useState<typeof EMPTY_VARIANT[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
   const [view, setView] = useState<'active' | 'archived'>('active');
 
@@ -95,12 +106,14 @@ export default function ProductsPage() {
 
   const load = useCallback(async () => {
     try {
-      const [productData, categoryData] = await Promise.all([
+      const [productData, categoryData, locationData] = await Promise.all([
         api.get<{ products: Product[] }>(`/api/products?status=${view}`),
         api.get<{ categories: Category[] }>('/api/categories'),
+        api.get<{ locations: Location[] }>('/api/locations'),
       ]);
       setProducts(productData.products);
       setCategories(categoryData.categories);
+      setLocations(locationData.locations);
     } catch (err) {
       toast.push('error', errorMessage(err));
     }
@@ -115,8 +128,38 @@ export default function ProductsPage() {
   }, [view]);
 
   const optionNames = form.optionNames.split(',').map((s) => s.trim()).filter(Boolean);
+  const isSimpleProduct = variantDrafts.length === 0;
+
+  // ---- Form validation --------------------------------------------------
+  const validate = (): Record<string, string> => {
+    const errors: Record<string, string> = {};
+    if (!form.name.trim()) errors.name = 'Product name is required.';
+    if (form.basePrice < 0) errors.basePrice = 'Price cannot be negative.';
+    if (form.costPrice < 0) errors.costPrice = 'Cost cannot be negative.';
+    if (isSimpleProduct && form.openingQuantity < 0) {
+      errors.openingQuantity = 'Quantity cannot be negative.';
+    }
+    if (isSimpleProduct && form.openingQuantity > 0 && !form.openingLocationId) {
+      errors.openingQuantity = 'Choose a location for opening stock.';
+    }
+    for (let i = 0; i < variantDrafts.length; i++) {
+      const v = variantDrafts[i];
+      if (v.label.trim() === '' && v.quantity > 0) {
+        errors[`variant_${i}_label`] = 'Label required when setting quantity.';
+      }
+      if (v.quantity > 0 && !v.locationId) {
+        errors[`variant_${i}_location`] = 'Choose a location for this variant.';
+      }
+    }
+    return errors;
+  };
+
+  const hasErrors = useMemo(() => Object.keys(validate()).length > 0, [form, variantDrafts]);
 
   const create = async () => {
+    const errors = validate();
+    setFormErrors(errors);
+    if (Object.keys(errors).length > 0) return;
     setBusy(true);
     try {
       const variants = variantDrafts
@@ -133,6 +176,8 @@ export default function ProductsPage() {
             costPrice: v.cost ? Number(v.cost) : null,
             sellingPrice: v.price ? Number(v.price) : null,
             lowStockThreshold: Number(v.lowStock) || 10,
+            quantity: v.quantity > 0 ? v.quantity : undefined,
+            locationId: v.locationId || undefined,
           };
         });
 
@@ -143,11 +188,14 @@ export default function ProductsPage() {
         categoryId: form.categoryId || null,
         optionNames,
         variants,
+        openingQuantity: isSimpleProduct && form.openingQuantity > 0 ? form.openingQuantity : undefined,
+        openingLocationId: isSimpleProduct && form.openingQuantity > 0 ? form.openingLocationId : undefined,
       });
       toast.push('success', 'Product created with its variants.');
       setOpen(false);
       setForm(EMPTY_FORM);
       setVariantDrafts([]);
+      setFormErrors({});
       await load();
     } catch (err) {
       toast.push('error', errorMessage(err));
@@ -187,6 +235,8 @@ export default function ProductsPage() {
       costPrice: product.costPrice,
       categoryId: product.category?.id ?? '',
       optionNames: product.optionNames ?? '',
+      openingQuantity: 0,
+      openingLocationId: '',
     });
     setEditVariants(
       product.variants.map((v) => ({
@@ -204,6 +254,10 @@ export default function ProductsPage() {
 
   const saveEdit = async () => {
     if (!editing) return;
+    if (!editForm.name.trim()) {
+      toast.push('error', 'Product name is required.');
+      return;
+    }
     setBusy(true);
     try {
       const newOptionNames = editForm.optionNames.split(',').map((s) => s.trim()).filter(Boolean);
@@ -217,8 +271,6 @@ export default function ProductsPage() {
         optionNames: newOptionNames,
       });
 
-      // Update variants individually (a user that can edit products may not
-      // always have variant.update; gate each write by permission).
       if (can('variant.update')) {
         for (const v of editVariants) {
           await api.patch(`/api/variants/${v.id}`, {
@@ -322,6 +374,13 @@ export default function ProductsPage() {
 
   const canManageCatalog = can('product.create') || can('product.update');
 
+  const warehouseLocations = locations.filter((l) => l.canReceivePurchase || l.type === 'WAREHOUSE');
+
+  const isSimpleProductDisplay = (p: Product) => {
+    const active = p.variants.filter((v) => v.isActive);
+    return active.length === 1 && active[0].isDefault && active[0].label === 'Standard';
+  };
+
   return (
     <Shell>
       <PageHeader
@@ -381,120 +440,130 @@ export default function ProductsPage() {
                   <th>Product</th>
                   <th>Category</th>
                   <th className="text-right">Base price</th>
-                  <th className="text-right">Variants</th>
-                  <th className="text-right">On hand</th>
+                  <th className="text-right">{view === 'active' ? 'Quantity' : 'Variants'}</th>
                   <th />
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((product) => (
-                  <Fragment key={product.id}>
-                    <tr>
-                      <td>
-                        <button
-                          className="text-left font-medium text-ink-900 hover:underline dark:text-ink-100"
-                          onClick={() => setExpanded(expanded === product.id ? null : product.id)}
-                          type="button"
-                        >
-                          {expanded === product.id ? '▾ ' : '▸ '}
-                          {product.name}
-                        </button>
-                        {product.description && <p className="text-xs text-ink-500 dark:text-ink-400">{product.description}</p>}
-                      </td>
-                      <td className="text-ink-600 dark:text-ink-300">{product.category?.name ?? '—'}</td>
-                      <td className="text-right tabular-nums">{currency(product.basePrice)}</td>
-                      <td className="text-right tabular-nums">{product.variants.length}</td>
-                      <td className="text-right tabular-nums">
-                        <Badge tone={product.totalOnHand && product.totalOnHand > 0 ? 'green' : 'neutral'}>
-                          {product.totalOnHand ?? 0}
-                        </Badge>
-                      </td>
-                      <td className="text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          {view === 'active' && can('product.update') && (
-                            <button className="btn-ghost btn-sm" onClick={() => openEdit(product)} type="button">
-                              Edit
-                            </button>
-                          )}
-                          {can('product.delete') && view === 'active' && (
-                            <button className="btn-ghost btn-sm" onClick={() => archive(product)} type="button">
-                              Archive
-                            </button>
-                          )}
-                          {can('product.update') && view === 'archived' && (
-                            <button className="btn-ghost btn-sm" onClick={() => restore(product)} type="button">
-                              Restore
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                    {expanded === product.id && (
+                {filtered.map((product) => {
+                  const simple = isSimpleProductDisplay(product);
+                  return (
+                    <Fragment key={product.id}>
                       <tr>
-                        <td colSpan={6} className="bg-ink-50 dark:bg-ink-800/50">
-                          <div className="space-y-3 p-3">
-                            <table className="table">
-                              <thead>
-                                <tr>
-                                  <th>Variant</th>
-                                  <th>SKU</th>
-                                  <th>Barcode</th>
-                                  <th className="text-right">Cost</th>
-                                  <th className="text-right">Price</th>
-                                  <th className="text-right">Low at</th>
-                                  <th className="text-right">On hand</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {product.variants.map((variant) => (
-                                  <tr key={variant.id}>
-                                    <td>
-                                      {variant.label}
-                                      {variant.isDefault && <Badge tone="blue"> default</Badge>}
-                                      {!variant.isActive && <Badge tone="red"> archived</Badge>}
-                                    </td>
-                                    <td className="font-mono text-xs">{variant.sku}</td>
-                                    <td className="font-mono text-xs text-ink-500 dark:text-ink-400">{variant.barcode}</td>
-                                    <td className="text-right tabular-nums">
-                                      {currency(variant.costPrice ?? product.costPrice)}
-                                    </td>
-                                    <td className="text-right tabular-nums">
-                                      {currency(variant.sellingPrice ?? product.basePrice)}
-                                    </td>
-                                    <td className="text-right tabular-nums text-ink-500 dark:text-ink-400">{variant.lowStockThreshold}</td>
-                                    <td className="text-right tabular-nums">
-                                      <span className="tabular-nums">
-                                        <Badge tone={variant.onHand && variant.onHand > 0 ? 'green' : 'neutral'}>{variant.onHand ?? 0}</Badge>
-                                        {variant.reserved ? <span className="ml-1 text-xs text-ink-400">res {variant.reserved}</span> : null}
-                                      </span>
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                            {product.variants.some((v) => (v.stock?.length ?? 0) > 0) && (
-                              <div className="grid gap-2 sm:grid-cols-2">
-                                {product.variants.flatMap((v) =>
-                                  (v.stock ?? []).map((row) => (
-                                    <div
-                                      key={`${v.id}-${row.locationId}`}
-                                      className="flex items-center justify-between rounded-lg border border-ink-200 bg-white px-3 py-1.5 text-xs dark:border-ink-700 dark:bg-ink-900/40"
-                                    >
-                                      <span className="text-ink-600 dark:text-ink-300">{v.label}: location {row.locationId.slice(-6)}</span>
-                                      <span className="font-medium tabular-nums">
-                                        {row.onHand} <span className="text-ink-400">(sell {row.sellable})</span>
-                                      </span>
-                                    </div>
-                                  )),
-                                )}
-                              </div>
+                        <td>
+                          <button
+                            className="text-left font-medium text-ink-900 hover:underline dark:text-ink-100"
+                            onClick={() => setExpanded(expanded === product.id ? null : product.id)}
+                            type="button"
+                          >
+                            {expanded === product.id ? '▾ ' : '▸ '}
+                            {product.name}
+                          </button>
+                          {product.description && <p className="text-xs text-ink-500 dark:text-ink-400">{product.description}</p>}
+                        </td>
+                        <td className="text-ink-600 dark:text-ink-300">{product.category?.name ?? '—'}</td>
+                        <td className="text-right tabular-nums">{currency(product.basePrice)}</td>
+                        <td className="text-right tabular-nums">
+                          {simple ? (
+                            <Badge tone={product.totalOnHand && product.totalOnHand > 0 ? 'green' : 'neutral'}>
+                              {product.totalOnHand ?? 0}
+                            </Badge>
+                          ) : (
+                            <span>
+                              <Badge tone="blue">{product.variants.length}</Badge>
+                              <span className="ml-1.5 tabular-nums text-ink-500 dark:text-ink-400">
+                                ({product.totalOnHand ?? 0} on hand)
+                              </span>
+                            </span>
+                          )}
+                        </td>
+                        <td className="text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            {view === 'active' && can('product.update') && (
+                              <button className="btn-ghost btn-sm" onClick={() => openEdit(product)} type="button">
+                                Edit
+                              </button>
+                            )}
+                            {can('product.delete') && view === 'active' && (
+                              <button className="btn-ghost btn-sm" onClick={() => archive(product)} type="button">
+                                Archive
+                              </button>
+                            )}
+                            {can('product.update') && view === 'archived' && (
+                              <button className="btn-ghost btn-sm" onClick={() => restore(product)} type="button">
+                                Restore
+                              </button>
                             )}
                           </div>
                         </td>
                       </tr>
-                    )}
-                  </Fragment>
-                ))}
+                      {expanded === product.id && (
+                        <tr>
+                          <td colSpan={5} className="bg-ink-50 dark:bg-ink-800/50">
+                            <div className="space-y-3 p-3">
+                              <table className="table">
+                                <thead>
+                                  <tr>
+                                    <th>Variant</th>
+                                    <th>SKU</th>
+                                    <th>Barcode</th>
+                                    <th className="text-right">Cost</th>
+                                    <th className="text-right">Price</th>
+                                    <th className="text-right">Low at</th>
+                                    <th className="text-right">On hand</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {product.variants.map((variant) => (
+                                    <tr key={variant.id}>
+                                      <td>
+                                        {variant.label}
+                                        {variant.isDefault && <Badge tone="blue"> default</Badge>}
+                                        {!variant.isActive && <Badge tone="red"> archived</Badge>}
+                                      </td>
+                                      <td className="font-mono text-xs">{variant.sku}</td>
+                                      <td className="font-mono text-xs text-ink-500 dark:text-ink-400">{variant.barcode}</td>
+                                      <td className="text-right tabular-nums">
+                                        {currency(variant.costPrice ?? product.costPrice)}
+                                      </td>
+                                      <td className="text-right tabular-nums">
+                                        {currency(variant.sellingPrice ?? product.basePrice)}
+                                      </td>
+                                      <td className="text-right tabular-nums text-ink-500 dark:text-ink-400">{variant.lowStockThreshold}</td>
+                                      <td className="text-right tabular-nums">
+                                        <span className="tabular-nums">
+                                          <Badge tone={variant.onHand && variant.onHand > 0 ? 'green' : 'neutral'}>{variant.onHand ?? 0}</Badge>
+                                          {variant.reserved ? <span className="ml-1 text-xs text-ink-400">res {variant.reserved}</span> : null}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                              {product.variants.some((v) => (v.stock?.length ?? 0) > 0) && (
+                                <div className="grid gap-2 sm:grid-cols-2">
+                                  {product.variants.flatMap((v) =>
+                                    (v.stock ?? []).map((row) => (
+                                      <div
+                                        key={`${v.id}-${row.locationId}`}
+                                        className="flex items-center justify-between rounded-lg border border-ink-200 bg-white px-3 py-1.5 text-xs dark:border-ink-700 dark:bg-ink-900/40"
+                                      >
+                                        <span className="text-ink-600 dark:text-ink-300">{v.label}: location {row.locationId.slice(-6)}</span>
+                                        <span className="font-medium tabular-nums">
+                                          {row.onHand} <span className="text-ink-400">(sell {row.sellable})</span>
+                                        </span>
+                                      </div>
+                                    )),
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </TableWrap>
@@ -509,10 +578,10 @@ export default function ProductsPage() {
         onClose={() => setOpen(false)}
         footer={
           <>
-            <button className="btn-secondary" onClick={() => setOpen(false)} type="button">
+            <button className="btn-secondary" onClick={() => { setOpen(false); setFormErrors({}); }} type="button">
               Cancel
             </button>
-            <button className="btn-primary" disabled={busy || !form.name} onClick={create} type="button">
+            <button className="btn-primary" disabled={busy || !form.name.trim()} onClick={create} type="button">
               {busy ? 'Creating…' : 'Create product'}
             </button>
           </>
@@ -521,7 +590,8 @@ export default function ProductsPage() {
         <div className="space-y-4">
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Name">
-              <input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+              <input className="input" value={form.name} onChange={(e) => { setForm({ ...form, name: e.target.value }); setFormErrors({ ...formErrors, name: '' }); }} />
+              {formErrors.name && <p className="mt-1 text-xs text-red-500">{formErrors.name}</p>}
             </Field>
             <Field label="Category">
               <div className="flex gap-2">
@@ -572,6 +642,7 @@ export default function ProductsPage() {
                 value={form.basePrice}
                 onChange={(e) => setForm({ ...form, basePrice: Number(e.target.value) })}
               />
+              {formErrors.basePrice && <p className="mt-1 text-xs text-red-500">{formErrors.basePrice}</p>}
             </Field>
             <Field label="Default cost price">
               <input
@@ -580,6 +651,7 @@ export default function ProductsPage() {
                 value={form.costPrice}
                 onChange={(e) => setForm({ ...form, costPrice: Number(e.target.value) })}
               />
+              {formErrors.costPrice && <p className="mt-1 text-xs text-red-500">{formErrors.costPrice}</p>}
             </Field>
             <Field label="Option names" hint="Comma separated, e.g. Size,Color" className="sm:col-span-2">
               <input
@@ -598,6 +670,40 @@ export default function ProductsPage() {
             </Field>
           </div>
 
+          {/* Opening stock for simple products (no explicit variants) */}
+          {isSimpleProduct && (
+            <div className="rounded-lg border border-ink-200 p-3 dark:border-ink-700">
+              <p className="label mb-2">Starting stock (optional)</p>
+              <p className="mb-2 text-xs text-ink-500 dark:text-ink-400">
+                Enter a starting quantity to open initial stock. This creates an opening batch so the product is immediately available.
+              </p>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <Field label="Quantity">
+                  <input
+                    className="input"
+                    type="number"
+                    min={0}
+                    value={form.openingQuantity}
+                    onChange={(e) => { setForm({ ...form, openingQuantity: Number(e.target.value) }); setFormErrors({ ...formErrors, openingQuantity: '' }); }}
+                  />
+                  {formErrors.openingQuantity && <p className="mt-1 text-xs text-red-500">{formErrors.openingQuantity}</p>}
+                </Field>
+                <Field label="Location">
+                  <select
+                    className="input"
+                    value={form.openingLocationId}
+                    onChange={(e) => setForm({ ...form, openingLocationId: e.target.value })}
+                  >
+                    <option value="">— choose —</option>
+                    {warehouseLocations.map((l) => (
+                      <option key={l.id} value={l.id}>{l.name}</option>
+                    ))}
+                  </select>
+                </Field>
+              </div>
+            </div>
+          )}
+
           <div>
             <div className="mb-2 flex items-center justify-between">
               <span className="label mb-0">Variants</span>
@@ -615,49 +721,36 @@ export default function ProductsPage() {
             </p>
             <div className="space-y-2">
               {variantDrafts.map((draft, index) => (
-                <div key={index} className="grid grid-cols-[1fr_7rem_7rem_5rem_auto] gap-2">
+                <div key={index} className="grid grid-cols-[1fr_5rem_5rem_5rem_5rem_auto] gap-2">
                   <input
                     className="input"
                     placeholder={optionNames.join(' / ') || 'Standard'}
                     value={draft.label}
-                    onChange={(e) =>
-                      setVariantDrafts(variantDrafts.map((d, i) => (i === index ? { ...d, label: e.target.value } : d)))
-                    }
+                    onChange={(e) => setVariantDrafts(variantDrafts.map((d, i) => (i === index ? { ...d, label: e.target.value } : d)))}
                   />
-                  <input
-                    className="input"
-                    placeholder="cost"
-                    type="number"
-                    value={draft.cost}
-                    onChange={(e) =>
-                      setVariantDrafts(variantDrafts.map((d, i) => (i === index ? { ...d, cost: e.target.value } : d)))
-                    }
-                  />
-                  <input
-                    className="input"
-                    placeholder="price"
-                    type="number"
-                    value={draft.price}
-                    onChange={(e) =>
-                      setVariantDrafts(variantDrafts.map((d, i) => (i === index ? { ...d, price: e.target.value } : d)))
-                    }
-                  />
-                  <input
-                    className="input"
-                    placeholder="low at"
-                    type="number"
-                    value={draft.lowStock}
-                    onChange={(e) =>
-                      setVariantDrafts(variantDrafts.map((d, i) => (i === index ? { ...d, lowStock: Number(e.target.value) } : d)))
-                    }
-                  />
-                  <button
-                    className="btn-ghost btn-sm"
-                    onClick={() => setVariantDrafts(variantDrafts.filter((_, i) => i !== index))}
-                    type="button"
-                  >
-                    ✕
-                  </button>
+                  <input className="input" placeholder="cost" type="number" value={draft.cost}
+                    onChange={(e) => setVariantDrafts(variantDrafts.map((d, i) => (i === index ? { ...d, cost: e.target.value } : d)))} />
+                  <input className="input" placeholder="price" type="number" value={draft.price}
+                    onChange={(e) => setVariantDrafts(variantDrafts.map((d, i) => (i === index ? { ...d, price: e.target.value } : d)))} />
+                  <input className="input" placeholder="qty" type="number" min={0} value={draft.quantity || ''}
+                    onChange={(e) => setVariantDrafts(variantDrafts.map((d, i) => (i === index ? { ...d, quantity: Number(e.target.value), locationId: Number(e.target.value) > 0 && !d.locationId ? (warehouseLocations[0]?.id ?? '') : d.locationId } : d)))} />
+                  <button className="btn-ghost btn-sm"
+                    onClick={() => setVariantDrafts(variantDrafts.filter((_, i) => i !== index))} type="button">✕</button>
+                  {formErrors[`variant_${index}_label`] && (
+                    <p className="col-span-6 text-xs text-red-500">{formErrors[`variant_${index}_label`]}</p>
+                  )}
+                  {draft.quantity > 0 && (
+                    <div className="col-span-6 flex gap-2">
+                      <select className="input" value={draft.locationId}
+                        onChange={(e) => setVariantDrafts(variantDrafts.map((d, i) => (i === index ? { ...d, locationId: e.target.value } : d)))}>
+                        <option value="">— location —</option>
+                        {warehouseLocations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+                      </select>
+                      {formErrors[`variant_${index}_location`] && (
+                        <p className="text-xs text-red-500">{formErrors[`variant_${index}_location`]}</p>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -676,7 +769,7 @@ export default function ProductsPage() {
             <button className="btn-secondary" onClick={() => setEditing(null)} type="button">
               Cancel
             </button>
-            <button className="btn-primary" disabled={busy || !editForm.name} onClick={() => void saveEdit()} type="button">
+            <button className="btn-primary" disabled={busy || !editForm.name.trim()} onClick={() => void saveEdit()} type="button">
               {busy ? 'Saving…' : 'Save changes'}
             </button>
           </>
@@ -686,6 +779,7 @@ export default function ProductsPage() {
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Name">
               <input className="input" value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} />
+              {!editForm.name.trim() && <p className="mt-1 text-xs text-red-500">Product name is required.</p>}
             </Field>
             <Field label="Category">
               <select
@@ -748,38 +842,29 @@ export default function ProductsPage() {
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                       <Field label="Label">
                         <input className="input" value={v.label} onChange={(e) => setVariant(v.id, { label: e.target.value })} />
+                        {!v.label.trim() && <p className="mt-1 text-xs text-red-500">Label is required.</p>}
                       </Field>
                       <Field label="SKU">
                         <input className="input" value={v.sku} onChange={(e) => setVariant(v.id, { sku: e.target.value })} />
+                        {!v.sku.trim() && <p className="mt-1 text-xs text-red-500">SKU is required.</p>}
                       </Field>
                       <Field label="Barcode">
                         <input className="input" value={v.barcode} onChange={(e) => setVariant(v.id, { barcode: e.target.value })} />
+                        {!v.barcode.trim() && <p className="mt-1 text-xs text-red-500">Barcode is required.</p>}
                       </Field>
                     </div>
                     <div className="grid grid-cols-3 gap-2">
                       <Field label="Cost">
-                        <input
-                          className="input"
-                          type="number"
-                          value={v.cost}
-                          onChange={(e) => setVariant(v.id, { cost: e.target.value })}
-                        />
+                        <input className="input" type="number" value={v.cost}
+                          onChange={(e) => setVariant(v.id, { cost: e.target.value })} />
                       </Field>
                       <Field label="Price">
-                        <input
-                          className="input"
-                          type="number"
-                          value={v.price}
-                          onChange={(e) => setVariant(v.id, { price: e.target.value })}
-                        />
+                        <input className="input" type="number" value={v.price}
+                          onChange={(e) => setVariant(v.id, { price: e.target.value })} />
                       </Field>
                       <Field label="Low at">
-                        <input
-                          className="input"
-                          type="number"
-                          value={v.lowStock}
-                          onChange={(e) => setVariant(v.id, { lowStock: Number(e.target.value) })}
-                        />
+                        <input className="input" type="number" value={v.lowStock}
+                          onChange={(e) => setVariant(v.id, { lowStock: Number(e.target.value) })} />
                       </Field>
                     </div>
                   </div>

@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { audit } from '@/lib/audit';
-import { prisma } from '@/lib/db';
+import { prisma, TX_OPTIONS } from '@/lib/db';
 import { badRequest, guard, jsonError } from '@/lib/rbac';
-import { getStockMatrix } from '@/lib/stock';
+import { getStockMatrix, recordMovement } from '@/lib/stock';
 import { generateBarcode, generateSku } from '@/lib/utils';
 
 const createSchema = z.object({
@@ -13,6 +13,8 @@ const createSchema = z.object({
   basePrice: z.coerce.number().min(0).default(0),
   costPrice: z.coerce.number().min(0).default(0),
   optionNames: z.array(z.string().min(1)).max(4).default([]),
+  openingQuantity: z.coerce.number().int().min(0).optional(),
+  openingLocationId: z.string().optional(),
   variants: z
     .array(
       z.object({
@@ -23,6 +25,8 @@ const createSchema = z.object({
         costPrice: z.coerce.number().min(0).optional().nullable(),
         sellingPrice: z.coerce.number().min(0).optional().nullable(),
         lowStockThreshold: z.coerce.number().int().min(0).default(10),
+        quantity: z.coerce.number().int().min(0).optional(),
+        locationId: z.string().optional(),
       }),
     )
     .default([]),
@@ -136,6 +140,76 @@ export async function POST(request: Request) {
       include: { variants: true, category: true },
     });
 
+    // Opening stock: for each variant (or the auto-created default), write a
+    // batch + ledger entry so the product shows quantity immediately. This
+    // keeps the ledger as the single source of truth while allowing a starting
+    // quantity directly on the product form.
+    const openingStockEntries: { variantId: string; quantity: number; locationId: string }[] = [];
+    if (data.openingQuantity && data.openingQuantity > 0 && data.openingLocationId) {
+      // Product with no explicit variants — opening qty goes on the default variant.
+      if (data.variants.length === 0) {
+        openingStockEntries.push({
+          variantId: product.variants[0].id,
+          quantity: data.openingQuantity,
+          locationId: data.openingLocationId,
+        });
+      }
+    }
+    for (const vi of variantInputs) {
+      const qty = (vi as Record<string, unknown>).quantity as number | undefined;
+      const loc = (vi as Record<string, unknown>).locationId as string | undefined;
+      if (qty && qty > 0 && loc) {
+        // Find the matching variant by label/sku from the created product.
+        const attrPairs = Object.entries(vi.attributes ?? {}).filter(([, value]) => value);
+        const label =
+          vi.label?.trim() ||
+          (attrPairs.length ? attrPairs.map(([, value]) => value).join(' / ') : 'Standard');
+        const created = product.variants.find(
+          (v) => v.label === label || (data.variants.length === 0 && v.isDefault),
+        );
+        if (created) {
+          openingStockEntries.push({ variantId: created.id, quantity: qty, locationId: loc });
+        }
+      }
+    }
+
+    if (openingStockEntries.length > 0) {
+      await prisma.$transaction(
+        async (tx) => {
+          for (const entry of openingStockEntries) {
+            const batch = await tx.batch.create({
+              data: {
+                tenantId: ctx.tenantId ?? null,
+                code: `OS-${product.id.slice(-8)}-${entry.variantId.slice(-4)}`,
+                variantId: entry.variantId,
+                locationId: entry.locationId,
+                unitCost: data.costPrice,
+                quantity: entry.quantity,
+                remainingQty: entry.quantity,
+                receivedAt: new Date(),
+              },
+            });
+            await recordMovement(tx, {
+              type: 'opening_stock',
+              tenantId: ctx.tenantId ?? null,
+              variantId: entry.variantId,
+              locationId: entry.locationId,
+              quantity: entry.quantity,
+              batchId: batch.id,
+              status: 'available',
+              unitCost: data.costPrice,
+              totalCost: data.costPrice * entry.quantity,
+              referenceType: 'Product',
+              referenceId: product.id,
+              referenceLabel: product.name,
+              notes: `Opening stock: ${entry.quantity} units`,
+            });
+          }
+        },
+        TX_OPTIONS,
+      );
+    }
+
     await audit({
       ctx,
       action: 'create',
@@ -143,7 +217,14 @@ export async function POST(request: Request) {
       entityId: product.id,
       entityLabel: product.name,
       after: product,
-      metadata: { variants: product.variants.length },
+      metadata: {
+        variants: product.variants.length,
+        openingStock: openingStockEntries.map((e) => ({
+          variantId: e.variantId,
+          qty: e.quantity,
+          locationId: e.locationId,
+        })),
+      },
     });
 
     return NextResponse.json({ product }, { status: 201 });

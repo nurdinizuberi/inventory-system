@@ -219,6 +219,14 @@ their audit trail is preserved. Archiving never destroys business data.
 - **Stock is displayed, never stored.** The product list shows a **Total on hand** column, and
   expanding a product reveals each variant’s on-hand/sellable/reserved breakdown per location, all
   derived in real time from the movement ledger.
+- **A product is quantity-bearing even without variants.** When you add a product and leave the
+  variant list empty, you can enter a **starting quantity** (and a location) directly on the form —
+  an opening batch is created so the product is immediately available. When you add variants, each
+  variant carries its own starting quantity and the product’s **Total on hand is simply the sum of
+  its variants** — the two always conform, with no manual reconciliation.
+- **Forms are validated before submit.** Required fields (product name, variant labels, SKUs,
+  barcodes) and value checks (non-negative prices, a location whenever a starting quantity is set)
+  block submission and show inline errors instead of sending bad data to the server.
 - **Archiving is reversible.** Archive a product to withdraw it (and its variants) from lists and
   the POS. Switch to the **Archived** tab to see what you removed and **Restore** it at any time —
   its stock, batches and history come straight back undamaged.
