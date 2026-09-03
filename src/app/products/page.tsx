@@ -59,7 +59,7 @@ const EMPTY_FORM = {
   costPrice: '',
   categoryId: '',
   optionNames: 'Size,Color',
-  openingQuantity: 0,
+  openingQuantity: '',
   openingLocationId: '',
 };
 
@@ -72,8 +72,9 @@ interface VariantEdit {
   barcode: string;
   cost: string;
   price: string;
-  lowStock: number;
+  lowStock: string;
   isActive: boolean;
+  isNew: boolean;
 }
 
 export default function ProductsPage() {
@@ -147,10 +148,11 @@ export default function ProductsPage() {
     if (!form.name.trim()) errors.name = 'Product name is required.';
     if (Number(form.basePrice) < 0) errors.basePrice = 'Price cannot be negative.';
     if (Number(form.costPrice) < 0) errors.costPrice = 'Cost cannot be negative.';
-    if (isSimpleProduct && form.openingQuantity < 0) {
+    const oq = Number(form.openingQuantity);
+    if (isSimpleProduct && oq < 0) {
       errors.openingQuantity = 'Quantity cannot be negative.';
     }
-    if (isSimpleProduct && form.openingQuantity > 0 && !form.openingLocationId) {
+    if (isSimpleProduct && oq > 0 && !form.openingLocationId) {
       errors.openingQuantity = 'Choose a location for opening stock.';
     }
     for (let i = 0; i < variantDrafts.length; i++) {
@@ -199,8 +201,8 @@ export default function ProductsPage() {
         categoryId: form.categoryId || null,
         optionNames,
         variants,
-        openingQuantity: isSimpleProduct && form.openingQuantity > 0 ? form.openingQuantity : undefined,
-        openingLocationId: isSimpleProduct && form.openingQuantity > 0 ? form.openingLocationId : undefined,
+        openingQuantity: isSimpleProduct && Number(form.openingQuantity) > 0 ? Number(form.openingQuantity) : undefined,
+        openingLocationId: isSimpleProduct && Number(form.openingQuantity) > 0 ? form.openingLocationId : undefined,
       });
       toast.push('success', 'Product created with its variants.');
       setOpen(false);
@@ -264,7 +266,7 @@ export default function ProductsPage() {
       costPrice: product.costPrice ? String(product.costPrice) : '',
       categoryId: product.category?.id ?? '',
       optionNames: product.optionNames ?? '',
-      openingQuantity: 0,
+      openingQuantity: '',
       openingLocationId: '',
     });
     setEditVariants(
@@ -275,8 +277,9 @@ export default function ProductsPage() {
         barcode: v.barcode,
         cost: v.costPrice != null ? String(v.costPrice) : '',
         price: v.sellingPrice != null ? String(v.sellingPrice) : '',
-        lowStock: v.lowStockThreshold,
+        lowStock: String(v.lowStockThreshold),
         isActive: v.isActive,
+        isNew: false,
       })),
     );
   };
@@ -304,16 +307,25 @@ export default function ProductsPage() {
         optionNames: newOptionNames,
       });
 
-      if (can('variant.update')) {
+      if (can('variant.update') || can('variant.create')) {
         for (const v of editVariants) {
-          await api.patch(`/api/variants/${v.id}`, {
+          const payload = {
             label: v.label,
             sku: v.sku,
             barcode: v.barcode,
             costPrice: v.cost !== '' ? Number(v.cost) : null,
             sellingPrice: v.price !== '' ? Number(v.price) : null,
             lowStockThreshold: Number(v.lowStock) || 10,
-          });
+          };
+          if (v.isNew) {
+            if (!can('variant.create')) continue;
+            const blank = !v.label.trim() && !v.sku.trim() && !v.barcode.trim() && v.cost === '' && v.price === '';
+            if (blank) continue;
+            await api.post('/api/variants', { productId: editing.id, ...payload });
+          } else {
+            if (!can('variant.update')) continue;
+            await api.patch(`/api/variants/${v.id}`, payload);
+          }
         }
       }
 
@@ -329,6 +341,27 @@ export default function ProductsPage() {
 
   const setVariant = (id: string, patch: Partial<VariantEdit>) => {
     setEditVariants((prev) => prev.map((v) => (v.id === id ? { ...v, ...patch } : v)));
+  };
+
+  const addEditVariant = () => {
+    setEditVariants((prev) => [
+      ...prev,
+      {
+        id: `new-${Date.now()}`,
+        label: '',
+        sku: '',
+        barcode: '',
+        cost: '',
+        price: '',
+        lowStock: '10',
+        isActive: true,
+        isNew: true,
+      },
+    ]);
+  };
+
+  const removeEditVariant = (id: string) => {
+    setEditVariants((prev) => prev.filter((v) => !(v.isNew && v.id === id)));
   };
 
   // ----- Category management ------------------------------------------------
@@ -733,8 +766,9 @@ export default function ProductsPage() {
                     className="input"
                     type="number"
                     min={0}
+                    placeholder="0"
                     value={form.openingQuantity}
-                    onChange={(e) => { setForm({ ...form, openingQuantity: Number(e.target.value) }); setFormErrors({ ...formErrors, openingQuantity: '' }); }}
+                    onChange={(e) => { setForm({ ...form, openingQuantity: e.target.value }); setFormErrors({ ...formErrors, openingQuantity: '' }); }}
                   />
                   {formErrors.openingQuantity && <p className="mt-1 text-xs text-red-500">{formErrors.openingQuantity}</p>}
                 </Field>
@@ -883,42 +917,59 @@ export default function ProductsPage() {
           </div>
 
           <div>
-            <div className="mb-2 flex items-center justify-between">
+            <div className="mb-2 flex items-center justify-between gap-2">
               <span className="label mb-0">Variants</span>
-              {!can('variant.update') && (
-                <span className="text-xs text-ink-400">You don’t have variant.edit permission — product fields only.</span>
-              )}
+              <div className="flex items-center gap-2">
+                {can('variant.create') && (
+                  <button
+                    className="btn-secondary btn-sm"
+                    onClick={addEditVariant}
+                    type="button"
+                  >
+                    + Add variant
+                  </button>
+                )}
+                {!can('variant.update') && !can('variant.create') && (
+                  <span className="text-xs text-ink-400">You don’t have variant edit permission — product fields only.</span>
+                )}
+              </div>
             </div>
-            {can('variant.update') ? (
+            {can('variant.update') || can('variant.create') ? (
               <div className="space-y-3">
                 {editVariants.map((v) => (
                   <div key={v.id} className="space-y-2 rounded-lg border border-ink-200 p-3 dark:border-ink-700">
+                    {v.isNew && (
+                      <div className="mb-1 flex items-center justify-between">
+                        <span className="text-xs font-medium text-blue-600 dark:text-blue-400">New variant</span>
+                        <button className="btn-ghost btn-sm" onClick={() => removeEditVariant(v.id)} type="button">✕ Remove</button>
+                      </div>
+                    )}
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                       <Field label="Label">
                         <input className="input" value={v.label} onChange={(e) => setVariant(v.id, { label: e.target.value })} />
-                        {!v.label.trim() && <p className="mt-1 text-xs text-red-500">Label is required.</p>}
+                        {!v.label.trim() && !v.isNew && <p className="mt-1 text-xs text-red-500">Label is required.</p>}
                       </Field>
                       <Field label="SKU">
                         <input className="input" value={v.sku} onChange={(e) => setVariant(v.id, { sku: e.target.value })} />
-                        {!v.sku.trim() && <p className="mt-1 text-xs text-red-500">SKU is required.</p>}
+                        {!v.sku.trim() && !v.isNew && <p className="mt-1 text-xs text-red-500">SKU is required.</p>}
                       </Field>
                       <Field label="Barcode">
                         <input className="input" value={v.barcode} onChange={(e) => setVariant(v.id, { barcode: e.target.value })} />
-                        {!v.barcode.trim() && <p className="mt-1 text-xs text-red-500">Barcode is required.</p>}
+                        {!v.barcode.trim() && !v.isNew && <p className="mt-1 text-xs text-red-500">Barcode is required.</p>}
                       </Field>
                     </div>
                     <div className="grid grid-cols-3 gap-2">
                       <Field label="Cost">
-                        <input className="input" type="number" value={v.cost}
+                        <input className="input" type="number" inputMode="decimal" value={v.cost} placeholder="0"
                           onChange={(e) => setVariant(v.id, { cost: e.target.value })} />
                       </Field>
                       <Field label="Price">
-                        <input className="input" type="number" value={v.price}
+                        <input className="input" type="number" inputMode="decimal" value={v.price} placeholder="0"
                           onChange={(e) => setVariant(v.id, { price: e.target.value })} />
                       </Field>
                       <Field label="Low at">
-                        <input className="input" type="number" value={v.lowStock}
-                          onChange={(e) => setVariant(v.id, { lowStock: Number(e.target.value) })} />
+                        <input className="input" type="number" min={0} value={v.lowStock} placeholder="0"
+                          onChange={(e) => setVariant(v.id, { lowStock: e.target.value })} />
                       </Field>
                     </div>
                   </div>
