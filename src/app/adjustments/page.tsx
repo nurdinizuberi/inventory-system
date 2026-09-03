@@ -233,6 +233,11 @@ export default function AdjustmentsPage() {
       >
         <div className="space-y-3">
           <Field label="Variant">
+            {variants.length === 0 && (
+              <p className="mb-1 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+                No active variants to adjust. Add a product on the Products page, or restore an archived one.
+              </p>
+            )}
             <select className="input" value={form.variantId} onChange={(e) => setForm({ ...form, variantId: e.target.value })}>
               <option value="">Select…</option>
               {variants.map((variant) => (

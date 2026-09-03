@@ -323,6 +323,18 @@ export default function PurchasesPage() {
               </button>
             </div>
             <div className="space-y-2">
+              {variants.length === 0 && (
+                <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+                  No active products available to add. Create a product on the Products page, or restore one you
+                  archived — archived products don’t appear here.
+                </p>
+              )}
+              <div className="grid grid-cols-[1fr_6rem_8rem_auto] gap-2">
+                <span className="label mb-0">Variant</span>
+                <span className="label mb-0">Quantity</span>
+                <span className="label mb-0">Unit cost</span>
+                <span />
+              </div>
               {lines.map((line, index) => (
                 <div key={index} className="grid grid-cols-[1fr_6rem_8rem_auto] gap-2">
                   <select
@@ -349,14 +361,14 @@ export default function PurchasesPage() {
                   <input
                     className="input"
                     type="number"
-                    placeholder="qty"
+                    placeholder="e.g. 5"
                     value={line.quantity}
                     onChange={(e) => setLines(lines.map((l, i) => (i === index ? { ...l, quantity: e.target.value } : l)))}
                   />
                   <input
                     className="input"
                     type="number"
-                    placeholder="unit cost"
+                    placeholder="e.g. 2500"
                     value={line.unitCost}
                     onChange={(e) => setLines(lines.map((l, i) => (i === index ? { ...l, unitCost: e.target.value } : l)))}
                   />

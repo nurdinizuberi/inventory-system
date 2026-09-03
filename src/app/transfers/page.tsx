@@ -294,6 +294,17 @@ export default function TransfersPage() {
               Availability shown is what the source location can actually release (on hand less reservations).
             </p>
             <div className="space-y-2">
+              {!form.fromLocationId && (
+                <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+                  Choose a <strong>From</strong> location first — the item list loads from the stock available there.
+                </p>
+              )}
+              {form.fromLocationId && stock.length === 0 && (
+                <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+                  No sellable stock at the selected From location. Add stock (e.g. via a purchase or opening stock), or
+                  pick a different source location.
+                </p>
+              )}
               {lines.map((line, index) => {
                 const option = stock.find((s) => s.id === line.variantId);
                 const over = option && Number(line.quantity) > option.sellable;
