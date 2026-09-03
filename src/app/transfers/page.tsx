@@ -51,16 +51,15 @@ export default function TransfersPage() {
   const [backdateWarningOpen, setBackdateWarningOpen] = useState(false);
 
   const load = useCallback(async () => {
-    try {
-      const [transferData, locationData] = await Promise.all([
-        api.get<{ transfers: Transfer[] }>(`/api/transfers${filter === 'all' ? '' : `?status=${filter}`}`),
-        api.get<{ locations: LocationOption[] }>('/api/locations'),
-      ]);
-      setTransfers(transferData.transfers);
-      setLocations(locationData.locations.filter((l) => l.type !== 'DAMAGED'));
-    } catch (err) {
-      toast.push('error', errorMessage(err));
-    }
+    const [transferResult, locationResult] = await Promise.allSettled([
+      api.get<{ transfers: Transfer[] }>(`/api/transfers${filter === 'all' ? '' : `?status=${filter}`}`),
+      api.get<{ locations: LocationOption[] }>('/api/locations'),
+    ]);
+    if (transferResult.status === 'fulfilled') setTransfers(transferResult.value.transfers);
+    else toast.push('error', errorMessage(transferResult.reason));
+    if (locationResult.status === 'fulfilled')
+      setLocations(locationResult.value.locations.filter((l) => l.type !== 'DAMAGED'));
+    else toast.push('error', errorMessage(locationResult.reason));
   }, [filter, toast]);
 
   useEffect(() => {
@@ -69,8 +68,13 @@ export default function TransfersPage() {
 
   const loadStock = async (locationId: string) => {
     if (!locationId) return setStock([]);
-    const data = await api.get<{ variants: StockOption[] }>(`/api/variants?locationId=${locationId}`);
-    setStock(data.variants);
+    try {
+      const data = await api.get<{ variants: StockOption[] }>(`/api/variants?locationId=${locationId}`);
+      setStock(data.variants);
+    } catch (err) {
+      toast.push('error', errorMessage(err));
+      setStock([]);
+    }
   };
 
   const submit = async (backdateReason?: BackdateReason | null) => {

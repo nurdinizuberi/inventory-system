@@ -69,18 +69,17 @@ export default function PurchasesPage() {
   const [backdateWarningOpen, setBackdateWarningOpen] = useState(false);
 
   const loadOptions = useCallback(async () => {
-    try {
-      const [variantData, locationData, supplierData] = await Promise.all([
-        api.get<{ variants: VariantOption[] }>('/api/variants?light=1'),
-        api.get<{ locations: LocationOption[] }>('/api/locations'),
-        api.get<{ suppliers: SupplierOption[] }>('/api/suppliers'),
-      ]);
-      setVariants(variantData.variants);
-      setLocations(locationData.locations);
-      setSuppliers(supplierData.suppliers);
-    } catch (err) {
-      toast.push('error', errorMessage(err));
-    }
+    const [variantResult, locationResult, supplierResult] = await Promise.allSettled([
+      api.get<{ variants: VariantOption[] }>('/api/variants?light=1'),
+      api.get<{ locations: LocationOption[] }>('/api/locations'),
+      api.get<{ suppliers: SupplierOption[] }>('/api/suppliers'),
+    ]);
+    if (variantResult.status === 'fulfilled') setVariants(variantResult.value.variants);
+    else toast.push('error', errorMessage(variantResult.reason));
+    if (locationResult.status === 'fulfilled') setLocations(locationResult.value.locations);
+    else toast.push('error', errorMessage(locationResult.reason));
+    if (supplierResult.status === 'fulfilled') setSuppliers(supplierResult.value.suppliers);
+    else toast.push('error', errorMessage(supplierResult.reason));
   }, [toast]);
 
   const load = useCallback(async () => {

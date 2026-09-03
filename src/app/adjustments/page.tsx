@@ -45,18 +45,18 @@ export default function AdjustmentsPage() {
   const [form, setForm] = useState({ variantId: '', locationId: '', reason: 'count_correction', quantity: '-1', notes: '' });
 
   const load = useCallback(async () => {
-    try {
-      const [adjustmentData, locationData, variantData] = await Promise.all([
-        api.get<{ adjustments: Adjustment[] }>('/api/adjustments'),
-        api.get<{ locations: Option[] }>('/api/locations'),
-        api.get<{ variants: VariantOption[] }>('/api/variants?light=1'),
-      ]);
-      setItems(adjustmentData.adjustments);
-      setLocations(locationData.locations.filter((l) => (l as { type?: string }).type !== 'DAMAGED'));
-      setVariants(variantData.variants);
-    } catch (err) {
-      toast.push('error', errorMessage(err));
-    }
+    const [adjustmentResult, locationResult, variantResult] = await Promise.allSettled([
+      api.get<{ adjustments: Adjustment[] }>('/api/adjustments'),
+      api.get<{ locations: Option[] }>('/api/locations'),
+      api.get<{ variants: VariantOption[] }>('/api/variants?light=1'),
+    ]);
+    if (adjustmentResult.status === 'fulfilled') setItems(adjustmentResult.value.adjustments);
+    else toast.push('error', errorMessage(adjustmentResult.reason));
+    if (locationResult.status === 'fulfilled')
+      setLocations(locationResult.value.locations.filter((l) => (l as { type?: string }).type !== 'DAMAGED'));
+    else toast.push('error', errorMessage(locationResult.reason));
+    if (variantResult.status === 'fulfilled') setVariants(variantResult.value.variants);
+    else toast.push('error', errorMessage(variantResult.reason));
   }, [toast]);
 
   useEffect(() => {
