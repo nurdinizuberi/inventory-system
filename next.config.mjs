@@ -6,6 +6,10 @@ const nextConfig = {
     serverActions: { bodySizeLimit: '4mb' },
   },
   async headers() {
+    // The dev-mode webpack/react-refresh runtime evaluates module code with
+    // eval(), so `next dev` needs 'unsafe-eval' in script-src. Production
+    // bundles are precompiled and never eval, so keep the strict CSP there.
+    const isDev = process.env.NODE_ENV === 'development';
     return [
       {
         source: '/:path*',
@@ -28,7 +32,7 @@ const nextConfig = {
             key: 'Content-Security-Policy',
             value: [
               "default-src 'self'",
-              "script-src 'self' 'unsafe-inline'",
+              `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ''}`,
               "style-src 'self' 'unsafe-inline'",
               "img-src 'self' data: blob:",
               "font-src 'self' data:",
