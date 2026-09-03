@@ -1,6 +1,15 @@
 'use client';
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react';
 
 export type Theme = 'light' | 'dark';
 
@@ -27,7 +36,18 @@ interface ThemeContextValue {
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setTheme] = useState<Theme>(() => getInitialTheme());
+  // The server can't read localStorage or the OS preference, so it renders
+  // 'light' — and the first client render must render the same value or
+  // hydration will see <ThemeToggle>'s icon/labels differ and log a mismatch.
+  // The real stored/system theme is adopted in useLayoutEffect, which runs
+  // synchronously after hydration and before first paint, so the correct icon
+  // shows from the start (the layout's inline bootstrap <script> has already
+  // painted the right .dark class by then).
+  const [theme, setTheme] = useState<Theme>('light');
+
+  useLayoutEffect(() => {
+    setTheme(getInitialTheme());
+  }, []);
 
   useEffect(() => {
     applyTheme(theme);
