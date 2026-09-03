@@ -125,6 +125,12 @@ export async function POST(request: Request) {
             const sku = v.sku?.trim() || generateSku(data.name, v.attributes ?? {}, index + 1);
             const barcode = v.barcode?.trim() || generateBarcode(sku);
             return {
+              // Without an explicit tenantId the variant row is stamped NULL and
+              // becomes invisible to tenant-scoped variant queries — i.e. every
+              // item picker (purchases/transfers/adjustments) — even though the
+              // owning product belongs to the tenant. Always inherit the caller's
+              // tenant like the product itself does.
+              tenantId: ctx.tenantId ?? null,
               label,
               attributes: JSON.stringify(v.attributes ?? {}),
               sku,
