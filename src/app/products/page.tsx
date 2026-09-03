@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Shell, PageHeader } from '@/components/shell';
 import { Badge, Card, Empty, Field, Modal, TableWrap } from '@/components/ui';
 import { useAuth } from '@/components/auth-context';
@@ -55,8 +55,8 @@ interface Location {
 const EMPTY_FORM = {
   name: '',
   description: '',
-  basePrice: 0,
-  costPrice: 0,
+  basePrice: '',
+  costPrice: '',
   categoryId: '',
   optionNames: 'Size,Color',
   openingQuantity: 0,
@@ -88,6 +88,7 @@ export default function ProductsPage() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
   const [view, setView] = useState<'active' | 'archived'>('active');
@@ -104,28 +105,38 @@ export default function ProductsPage() {
   const [editingCat, setEditingCat] = useState<Category | null>(null);
   const [catEditName, setCatEditName] = useState('');
 
-  const load = useCallback(async () => {
-    try {
-      const [productData, categoryData, locationData] = await Promise.all([
-        api.get<{ products: Product[] }>(`/api/products?status=${view}`),
-        api.get<{ categories: Category[] }>('/api/categories'),
-        api.get<{ locations: Location[] }>('/api/locations'),
-      ]);
-      setProducts(productData.products);
-      setCategories(categoryData.categories);
-      setLocations(locationData.locations);
-    } catch (err) {
-      toast.push('error', errorMessage(err));
-    }
-  }, [toast, view]);
+  const reqSeq = useRef(0);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const load = useCallback(
+    async (targetView: 'active' | 'archived' = view) => {
+      const seq = ++reqSeq.current;
+      setLoading(true);
+      try {
+        const [productData, categoryData, locationData] = await Promise.all([
+          api.get<{ products: Product[] }>(`/api/products?status=${targetView}`),
+          api.get<{ categories: Category[] }>('/api/categories'),
+          api.get<{ locations: Location[] }>('/api/locations'),
+        ]);
+        if (seq !== reqSeq.current) return;
+        setProducts(productData.products);
+        setCategories(categoryData.categories);
+        setLocations(locationData.locations);
+      } catch (err) {
+        if (seq !== reqSeq.current) return;
+        toast.push('error', errorMessage(err));
+      } finally {
+        if (seq === reqSeq.current) setLoading(false);
+      }
+    },
+    [toast, view],
+  );
 
   useEffect(() => {
     setExpanded(null);
-  }, [view]);
+    setQuery('');
+    setProducts([]);
+    void load(view);
+  }, [view, load]);
 
   const optionNames = form.optionNames.split(',').map((s) => s.trim()).filter(Boolean);
   const isSimpleProduct = variantDrafts.length === 0;
@@ -134,8 +145,8 @@ export default function ProductsPage() {
   const validate = (): Record<string, string> => {
     const errors: Record<string, string> = {};
     if (!form.name.trim()) errors.name = 'Product name is required.';
-    if (form.basePrice < 0) errors.basePrice = 'Price cannot be negative.';
-    if (form.costPrice < 0) errors.costPrice = 'Cost cannot be negative.';
+    if (Number(form.basePrice) < 0) errors.basePrice = 'Price cannot be negative.';
+    if (Number(form.costPrice) < 0) errors.costPrice = 'Cost cannot be negative.';
     if (isSimpleProduct && form.openingQuantity < 0) {
       errors.openingQuantity = 'Quantity cannot be negative.';
     }
@@ -183,8 +194,8 @@ export default function ProductsPage() {
 
       await api.post('/api/products', {
         ...form,
-        basePrice: Number(form.basePrice),
-        costPrice: Number(form.costPrice),
+        basePrice: Number(form.basePrice || 0),
+        costPrice: Number(form.costPrice || 0),
         categoryId: form.categoryId || null,
         optionNames,
         variants,
@@ -224,6 +235,24 @@ export default function ProductsPage() {
     }
   };
 
+  const deleteProduct = async (product: Product) => {
+    const confirmed = window.confirm(
+      `Permanently delete "${product.name}"?\n\nThis cannot be undone and will remove its variants and full stock ledger (batches, movements, history).`,
+    );
+    if (!confirmed) return;
+    setBusy(true);
+    try {
+      await api.del(`/api/products/${product.id}`);
+      toast.push('info', `${product.name} permanently deleted.`);
+      setExpanded(null);
+      await load();
+    } catch (err) {
+      toast.push('error', errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   // ----- Edit -------------------------------------------------------------
 
   const openEdit = (product: Product) => {
@@ -231,8 +260,8 @@ export default function ProductsPage() {
     setEditForm({
       name: product.name,
       description: product.description ?? '',
-      basePrice: product.basePrice,
-      costPrice: product.costPrice,
+      basePrice: product.basePrice ? String(product.basePrice) : '',
+      costPrice: product.costPrice ? String(product.costPrice) : '',
       categoryId: product.category?.id ?? '',
       optionNames: product.optionNames ?? '',
       openingQuantity: 0,
@@ -258,6 +287,10 @@ export default function ProductsPage() {
       toast.push('error', 'Product name is required.');
       return;
     }
+    if (Number(editForm.basePrice) < 0 || Number(editForm.costPrice) < 0) {
+      toast.push('error', 'Prices cannot be negative.');
+      return;
+    }
     setBusy(true);
     try {
       const newOptionNames = editForm.optionNames.split(',').map((s) => s.trim()).filter(Boolean);
@@ -265,8 +298,8 @@ export default function ProductsPage() {
       await api.patch(`/api/products/${editing.id}`, {
         name: editForm.name,
         description: editForm.description || null,
-        basePrice: Number(editForm.basePrice),
-        costPrice: Number(editForm.costPrice),
+        basePrice: Number(editForm.basePrice || 0),
+        costPrice: Number(editForm.costPrice || 0),
         categoryId: editForm.categoryId || null,
         optionNames: newOptionNames,
       });
@@ -399,6 +432,7 @@ export default function ProductsPage() {
         <div className="flex items-center gap-2">
           <button
             className={`btn btn-sm ${view === 'active' ? 'btn-primary' : 'btn-secondary'}`}
+            disabled={loading && view !== 'active'}
             onClick={() => setView('active')}
             type="button"
           >
@@ -406,6 +440,7 @@ export default function ProductsPage() {
           </button>
           <button
             className={`btn btn-sm ${view === 'archived' ? 'btn-primary' : 'btn-secondary'}`}
+            disabled={loading && view !== 'archived'}
             onClick={() => setView('archived')}
             type="button"
           >
@@ -430,7 +465,9 @@ export default function ProductsPage() {
       </div>
 
       <Card>
-        {filtered.length === 0 ? (
+        {loading && filtered.length === 0 ? (
+          <Empty message="Loading…" />
+        ) : filtered.length === 0 ? (
           <Empty message={view === 'archived' ? 'No archived products.' : 'No products yet.'} />
         ) : (
           <TableWrap>
@@ -492,6 +529,15 @@ export default function ProductsPage() {
                             {can('product.update') && view === 'archived' && (
                               <button className="btn-ghost btn-sm" onClick={() => restore(product)} type="button">
                                 Restore
+                              </button>
+                            )}
+                            {can('product.delete') && view === 'archived' && (
+                              <button
+                                className="btn-ghost btn-sm text-red-600 dark:text-red-400"
+                                onClick={() => void deleteProduct(product)}
+                                type="button"
+                              >
+                                Delete
                               </button>
                             )}
                           </div>
@@ -638,18 +684,22 @@ export default function ProductsPage() {
             <Field label="Default selling price">
               <input
                 className="input"
+                inputMode="decimal"
                 type="number"
                 value={form.basePrice}
-                onChange={(e) => setForm({ ...form, basePrice: Number(e.target.value) })}
+                placeholder="0"
+                onChange={(e) => setForm({ ...form, basePrice: e.target.value })}
               />
               {formErrors.basePrice && <p className="mt-1 text-xs text-red-500">{formErrors.basePrice}</p>}
             </Field>
             <Field label="Default cost price">
               <input
                 className="input"
+                inputMode="decimal"
                 type="number"
                 value={form.costPrice}
-                onChange={(e) => setForm({ ...form, costPrice: Number(e.target.value) })}
+                placeholder="0"
+                onChange={(e) => setForm({ ...form, costPrice: e.target.value })}
               />
               {formErrors.costPrice && <p className="mt-1 text-xs text-red-500">{formErrors.costPrice}</p>}
             </Field>
@@ -798,17 +848,21 @@ export default function ProductsPage() {
             <Field label="Default selling price">
               <input
                 className="input"
+                inputMode="decimal"
                 type="number"
                 value={editForm.basePrice}
-                onChange={(e) => setEditForm({ ...editForm, basePrice: Number(e.target.value) })}
+                placeholder="0"
+                onChange={(e) => setEditForm({ ...editForm, basePrice: e.target.value })}
               />
             </Field>
             <Field label="Default cost price">
               <input
                 className="input"
+                inputMode="decimal"
                 type="number"
                 value={editForm.costPrice}
-                onChange={(e) => setEditForm({ ...editForm, costPrice: Number(e.target.value) })}
+                placeholder="0"
+                onChange={(e) => setEditForm({ ...editForm, costPrice: e.target.value })}
               />
             </Field>
             <Field label="Option names" hint="Comma separated, e.g. Size,Color" className="sm:col-span-2">

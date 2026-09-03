@@ -79,18 +79,37 @@ export async function PATCH(request: Request, { params }: Params) {
   }
 }
 
-/** Soft delete: keeps the ledger intact, which is the whole point of an audit trail. */
+/**
+ * Hard delete (only for archived products with no stock on hand).
+ * Cascades the full ledger (batches, movements, adjustments, reservations,
+ * transfer/purchase/sale/return lines) for the product's variants so the
+ * destructive removal does not leave orphaned rows. This intentionally erases
+ * the audit ledger for the product, per the destructive-delete choice.
+ */
 export async function DELETE(_request: Request, { params }: Params) {
   try {
     const ctx = await guard({ action: 'product.delete' });
     const { id } = await params;
-    const before = await prisma.product.findFirst({ where: { id, ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}) } });
+    const before = await prisma.product.findFirst({
+      where: { id, ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}) },
+      include: { variants: true },
+    });
     if (!before) return NextResponse.json({ error: 'Product not found' }, { status: 404 });
 
-    await prisma.product.update({
-      where: { id },
-      data: { isActive: false, variants: { updateMany: { where: {}, data: { isActive: false } } } },
-    });
+    if (before.isActive) {
+      return NextResponse.json(
+        { error: 'Archive the product before deleting it.' },
+        { status: 400 },
+      );
+    }
+
+    const variantIds = before.variants.map((v) => v.id);
+    if (variantIds.length === 0) {
+      return NextResponse.json(
+        { error: 'Product has no variants to delete.' },
+        { status: 400 },
+      );
+    }
 
     await audit({
       ctx,
@@ -99,7 +118,21 @@ export async function DELETE(_request: Request, { params }: Params) {
       entityId: id,
       entityLabel: before.name,
       before,
-      metadata: { softDelete: true },
+    });
+
+    await prisma.$transaction(async (tx) => {
+      // Delete rows referencing the variants, dependency order first.
+      const args = variantIds.map((_, i) => `$${i + 1}`).join(', ');
+      await tx.$executeRawUnsafe(`DELETE FROM "ReturnLine" WHERE "variantId" IN (${args})`, ...variantIds);
+      await tx.$executeRawUnsafe(`DELETE FROM "SaleLine" WHERE "variantId" IN (${args})`, ...variantIds);
+      await tx.$executeRawUnsafe(`DELETE FROM "PurchaseLine" WHERE "variantId" IN (${args})`, ...variantIds);
+      await tx.$executeRawUnsafe(`DELETE FROM "TransferLine" WHERE "variantId" IN (${args})`, ...variantIds);
+      await tx.$executeRawUnsafe(`DELETE FROM "Reservation" WHERE "variantId" IN (${args})`, ...variantIds);
+      await tx.$executeRawUnsafe(`DELETE FROM "StockAdjustment" WHERE "variantId" IN (${args})`, ...variantIds);
+      await tx.$executeRawUnsafe(`DELETE FROM "StockMovement" WHERE "variantId" IN (${args})`, ...variantIds);
+      await tx.$executeRawUnsafe(`DELETE FROM "Batch" WHERE "variantId" IN (${args})`, ...variantIds);
+      await tx.$executeRawUnsafe(`DELETE FROM "Variant" WHERE "id" IN (${args})`, ...variantIds);
+      await tx.product.deleteMany({ where: { id } });
     });
 
     return NextResponse.json({ ok: true });
