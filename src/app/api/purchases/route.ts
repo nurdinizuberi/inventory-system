@@ -64,8 +64,9 @@ export async function GET(request: Request) {
 }
 
 /**
- * Create a purchase order against a receiving location (a warehouse, or a
- * store flagged / falling back to receive direct deliveries).
+ * Create a purchase order against a receiving location — any warehouse or
+ * retail store with the “can receive purchases” flag (stores have it on by
+ * default, so stock can be ordered straight into the shop).
  * `confirmImmediately` also runs the goods-receipt step (batch creation +
  * purchase_in ledger rows).
  */
@@ -76,10 +77,11 @@ export async function POST(request: Request) {
     if (!parsed.success) return badRequest(parsed.error.issues.map((i) => i.message).join(', '));
     const data = parsed.data;
 
-    // Server-side capability check: warehouses receive purchases, and retail
-    // stores may too when flagged or when the tenant has no other receiving
-    // location (store-only accounts receive directly into the shop).
-    await assertLocationAccess(ctx, data.locationId, { canReceivePurchase: true, allowDirectToStore: true });
+    // Server-side capability check: the location must be flagged to receive
+    // purchases. Warehouses and retail stores are flagged by default on
+    // creation, so this lets stock land in a warehouse or straight into a
+    // store regardless of which was set up first.
+    await assertLocationAccess(ctx, data.locationId, { canReceivePurchase: true });
 
     const supplier = await prisma.supplier.findFirst({ where: { id: data.supplierId, ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}) } });
     if (!supplier || !supplier.isActive) return badRequest('Supplier not found or inactive');

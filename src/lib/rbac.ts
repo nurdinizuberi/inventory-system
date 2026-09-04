@@ -257,7 +257,7 @@ export type ScopeSide = 'source' | 'destination';
 export async function guard(opts: {
   action: Action;
   locationId?: string | null;
-  require?: { canReceivePurchase?: boolean; canSellPos?: boolean; type?: string; allowDirectToStore?: boolean };
+  require?: { canReceivePurchase?: boolean; canSellPos?: boolean; type?: string };
   /** Only enforced when a locationId is supplied. */
   scope?: ScopeSide;
 }): Promise<GuardContext> {
@@ -305,28 +305,19 @@ export async function tryGuard(opts: {
 
 /**
  * May a location act as a purchase / opening-stock receiving point?
- * Yes when flagged. Otherwise — for a tenant that has NO receiving location
- * at all — an active retail store that sells at POS qualifies, so store-only
- * accounts (no warehouse) can stock their shop directly.
+ * Flag-only: warehouses and retail stores are enabled by default when they
+ * are created (see POST /api/locations), and a store can be switched off on
+ * the Locations page if it should not take direct deliveries. The presence
+ * of a warehouse no longer excludes stores from receiving.
  */
-export async function locationCanReceivePurchase(
-  ctx: { tenantId?: string | null },
-  location: { type: string; canSellPos: boolean; isActive: boolean; canReceivePurchase?: boolean },
-): Promise<boolean> {
-  if (location.canReceivePurchase) return true;
-  if (!ctx.tenantId || location.type !== 'RETAIL_STORE' || !location.canSellPos || !location.isActive) {
-    return false;
-  }
-  const hasReceiving = await prisma.location.count({
-    where: { tenantId: ctx.tenantId, canReceivePurchase: true },
-  });
-  return hasReceiving === 0;
+export function locationCanReceivePurchase(location: { canReceivePurchase: boolean }): boolean {
+  return location.canReceivePurchase;
 }
 
 export async function assertLocationAccess(
   ctx: GuardContext,
   locationId: string,
-  require?: { canReceivePurchase?: boolean; canSellPos?: boolean; type?: string; allowDirectToStore?: boolean },
+  require?: { canReceivePurchase?: boolean; canSellPos?: boolean; type?: string },
 ): Promise<void> {
   const location = await prisma.location.findUnique({ where: { id: locationId } });
   if (!location || !location.isActive) {
@@ -343,16 +334,11 @@ export async function assertLocationAccess(
   if (require?.type && location.type !== require.type) {
     throw new AuthError(`Location "${location.name}" must be of type ${require.type}.`, 422);
   }
-  if (require?.canReceivePurchase) {
-    const mayReceive =
-      location.canReceivePurchase ||
-      (require.allowDirectToStore === true && (await locationCanReceivePurchase(ctx, location)));
-    if (!mayReceive) {
-      throw new AuthError(
-        `Location "${location.name}" cannot receive purchases (can_receive_purchase = false).`,
-        422,
-      );
-    }
+  if (require?.canReceivePurchase && !location.canReceivePurchase) {
+    throw new AuthError(
+      `Location "${location.name}" cannot receive purchases (can_receive_purchase = false).`,
+      422,
+    );
   }
   if (require?.canSellPos && !location.canSellPos) {
     throw new AuthError(

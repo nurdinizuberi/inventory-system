@@ -29,26 +29,21 @@ const EMPTY = {
   type: 'RETAIL_STORE' as LocationType,
   address: '',
   phone: '',
-  canReceivePurchase: false,
+  canReceivePurchase: true,
   canSellPos: true,
 };
 
 /**
- * Sensible capability defaults for a new location: a warehouse receives
- * purchases, a retail store sells at POS — and a store is also enabled to
- * receive purchases when the tenant has no receiving location yet, so
- * store-only accounts can stock their shop without a warehouse.
+ * Sensible capability defaults for a new location: warehouses and retail
+ * stores both receive purchases (a store takes stock directly even when a
+ * warehouse already exists), and a store sells at POS. Uncheck “Can receive
+ * purchases” on a shop that should be stocked via transfers only.
  */
-function withDefaults(
-  type: LocationType,
-  existing: Location[],
-): typeof EMPTY {
-  const hasReceiving = existing.some((l) => l.canReceivePurchase);
+function withDefaults(type: LocationType): typeof EMPTY {
   return {
     ...EMPTY,
     type,
-    canReceivePurchase:
-      type === 'WAREHOUSE' ? true : type === 'RETAIL_STORE' ? !hasReceiving : false,
+    canReceivePurchase: type === 'WAREHOUSE' || type === 'RETAIL_STORE',
     canSellPos: type === 'RETAIL_STORE',
   };
 }
@@ -97,13 +92,13 @@ export default function LocationsPage() {
     <Shell>
       <PageHeader
         title="Locations"
-        description="Warehouses and retail stores share one schema — only the capability flags differ. A store is automatically enabled to receive purchases when no warehouse exists, so store-only accounts can register stock directly into the shop."
+        description="Warehouses and retail stores share one schema — only the capability flags differ. Stores receive purchases directly by default, so stock can be registered straight into the shop even when you also run a warehouse."
         action={
           can('location.manage') && (
             <button
               className="btn-primary"
               onClick={() => {
-                setForm(withDefaults('RETAIL_STORE', locations));
+                setForm(withDefaults('RETAIL_STORE'));
                 setOpen(true);
               }}
               type="button"
@@ -195,7 +190,7 @@ export default function LocationsPage() {
                 value={form.type}
                 onChange={(e) => {
                   const type = e.target.value as LocationType;
-                  setForm({ ...withDefaults(type, locations), code: form.code, name: form.name, address: form.address, phone: form.phone });
+                  setForm({ ...withDefaults(type), code: form.code, name: form.name, address: form.address, phone: form.phone });
                 }}
               >
                 <option value="WAREHOUSE">Warehouse</option>
@@ -222,7 +217,7 @@ export default function LocationsPage() {
               />
               Can receive purchases
               {form.type === 'RETAIL_STORE' && form.canReceivePurchase && (
-                <span className="text-xs text-ink-400 dark:text-ink-500">(auto-enabled — no warehouse yet)</span>
+                <span className="text-xs text-ink-400 dark:text-ink-500">(default for retail stores)</span>
               )}
             </label>
             <label className="flex items-center gap-2 text-sm">
@@ -232,8 +227,8 @@ export default function LocationsPage() {
           </div>
           {form.type === 'RETAIL_STORE' && !form.canReceivePurchase && (
             <p className="text-xs text-amber-600 dark:text-amber-400">
-              This store will not be able to receive purchases or opening stock unless enabled above or a warehouse
-              exists.
+              This store will not appear as a receiving option for purchases or opening stock — keep the flag on to
+              receive deliveries straight into the shop.
             </p>
           )}
         </div>

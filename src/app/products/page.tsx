@@ -55,13 +55,12 @@ interface Location {
 
 /**
  * Locations that may hold opening stock for a new product: any location
- * flagged to receive purchases, or — when the tenant has no receiving
- * location at all — a retail store that sells at POS (store-only accounts
- * register products straight into their shop).
+ * flagged to receive purchases. Warehouses and retail stores are both flagged
+ * by default, so a shop can receive products directly even when the tenant
+ * also has a warehouse — no transfer required.
  */
 function receivingTargets(locations: Location[]): Location[] {
-  const hasReceiving = locations.some((l) => l.canReceivePurchase);
-  return locations.filter((l) => l.canReceivePurchase || (!hasReceiving && l.type === 'RETAIL_STORE' && l.canSellPos));
+  return locations.filter((l) => l.canReceivePurchase);
 }
 
 const EMPTY_FORM = {

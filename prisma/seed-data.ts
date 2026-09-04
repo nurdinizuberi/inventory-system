@@ -420,7 +420,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
         type: 'RETAIL_STORE',
         address: 'Mbezi Beach Road, Kinondoni, Dar es Salaam',
         phone: '+255 22 277 1180',
-        canReceivePurchase: false,
+        canReceivePurchase: true,
         canSellPos: true,
       },
       {
@@ -429,7 +429,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
         type: 'RETAIL_STORE',
         address: 'Msimbazi Street, Kariakoo, Dar es Salaam',
         phone: '+255 22 246 3390',
-        canReceivePurchase: false,
+        canReceivePurchase: true,
         canSellPos: true,
       },
       {

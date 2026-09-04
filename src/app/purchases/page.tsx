@@ -49,13 +49,12 @@ interface LocationOption {
 }
 
 /**
- * Locations that may receive a purchase: any location flagged to receive, or
- * — when the tenant has no receiving location at all — a retail store that
- * sells at POS (store-only accounts receive stock directly into the shop).
+ * Locations that may receive a purchase: any location flagged to receive.
+ * Warehouses and retail stores are both flagged by default, so a purchase can
+ * be delivered to a shop directly even when the tenant also has a warehouse.
  */
 function receivingTargets(locations: LocationOption[]): LocationOption[] {
-  const hasReceiving = locations.some((l) => l.canReceivePurchase);
-  return locations.filter((l) => l.canReceivePurchase || (!hasReceiving && l.type === 'RETAIL_STORE' && l.canSellPos));
+  return locations.filter((l) => l.canReceivePurchase);
 }
 
 interface SupplierOption {
@@ -174,7 +173,7 @@ export default function PurchasesPage() {
   return (
     <Shell>        <PageHeader
           title="Purchases"
-          description="Goods can be received into a warehouse or, for store-only accounts, directly into the shop. Confirming opens a costed batch per line and writes purchase_in ledger rows."
+          description="Goods can be received into a warehouse or straight into any retail store — choose whichever location the delivery is going to. Confirming opens a costed batch per line and writes purchase_in ledger rows."
           action={
             can('purchase.create') && (
               <button
@@ -198,8 +197,8 @@ export default function PurchasesPage() {
           <Link className="underline" href="/locations">
             Locations
           </Link>{' '}
-          and enable “Can receive purchases” on your warehouse or shop, or create one — store-only accounts can
-          receive stock directly into their store.
+          and create a warehouse or retail store — both receive purchases by default, or tick “Can receive
+          purchases” on an existing location.
         </div>
       )}
 
