@@ -1,0 +1,41 @@
+name: Migrate production database
+
+# Vercel auto-deploys every push to main, but its builds never run DDL.
+# This job applies pending Prisma migrations as soon as code lands on main,
+# so schema changes are in place before (or around the same time as) the
+# new build is aliased to production.
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Serialize runs so two rapid pushes can't race each other on the database.
+concurrency:
+  group: db-migrations
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    name: Apply pending Prisma migrations
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # Direct (unpooled) production connection string — Neon's pooled
+      # endpoint is not suitable for Prisma Migrate DDL.
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply pending migrations
+        run: npx prisma migrate deploy
