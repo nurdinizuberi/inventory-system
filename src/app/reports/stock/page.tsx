@@ -24,6 +24,7 @@ interface Row {
   sellable: number;
   sold: number;
   lowStockThreshold: number;
+  stocked: boolean;
   lowStock: boolean;
   outOfStock: boolean;
   unitCost: number;
@@ -154,7 +155,7 @@ export default function StockReportPage() {
                   row.sold,
                   row.unitCost,
                   row.stockValue,
-                  row.outOfStock ? 'out of stock' : row.lowStock ? `low (<= ${row.lowStockThreshold})` : 'ok',
+                  row.outOfStock ? 'out of stock' : row.lowStock ? `low (<= ${row.lowStockThreshold})` : row.stocked ? 'ok' : 'not stocked here',
                 ])}
                 print={{
                   title: 'Current stock report',
@@ -192,7 +193,7 @@ export default function StockReportPage() {
                         String(row.sold),
                         money(row.unitCost),
                         money(row.stockValue),
-                        row.outOfStock ? 'out of stock' : row.lowStock ? `low (<= ${row.lowStockThreshold})` : 'ok',
+                        row.outOfStock ? 'out of stock' : row.lowStock ? `low (<= ${row.lowStockThreshold})` : row.stocked ? 'ok' : 'not stocked here',
                       ]),
                     },
                   ],
@@ -262,8 +263,10 @@ export default function StockReportPage() {
                         <Badge tone="red">out of stock</Badge>
                       ) : row.lowStock ? (
                         <Badge tone="amber">≤ {row.lowStockThreshold}</Badge>
-                      ) : (
+                      ) : row.stocked ? (
                         <Badge tone="green">ok</Badge>
+                      ) : (
+                        <Badge>not stocked</Badge>
                       )}
                     </td>
                   </tr>

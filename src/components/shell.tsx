@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
 import { useAuth } from './auth-context';
+import { LowStockAlert } from './low-stock-alert';
 import { ThemeToggle } from './theme-context';
 import { ROLE_LABELS, type Role } from '@/lib/types';
 
@@ -126,6 +127,7 @@ export function Shell({ children }: { children: ReactNode }) {
             </div>
           </div>
           <div className="flex items-center gap-3">
+            <LowStockAlert />
             <ThemeToggle />
             <span className="badge bg-ink-100 text-ink-700 dark:bg-ink-800 dark:text-ink-200">{ROLE_LABELS[user.role as Role]}</span>
             <button

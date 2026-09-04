@@ -69,6 +69,12 @@ export async function GET(request: Request) {
         const onHand = row?.onHand ?? 0;
         const reserved = row?.reserved ?? 0;
         const unitCost = latestCost.get(variant.id) ?? variant.costPrice ?? variant.product.costPrice;
+        // A pair only exists in the matrix when the ledger has movement rows
+        // for it. A variant that was never stocked at this location (e.g. a
+        // product registered directly into the store while the warehouse has
+        // no history for it) must NOT count as low or out of stock — those
+        // flags only make sense where the product actually lives.
+        const stocked = Boolean(row);
         return {
           variantId: variant.id,
           locationId: location.id,
@@ -84,8 +90,9 @@ export async function GET(request: Request) {
           sellable: row?.sellable ?? 0,
           sold: row?.sold ?? 0,
           lowStockThreshold: variant.lowStockThreshold,
-          lowStock: onHand <= variant.lowStockThreshold,
-          outOfStock: onHand <= 0,
+          stocked,
+          lowStock: stocked && onHand <= variant.lowStockThreshold,
+          outOfStock: stocked && onHand <= 0,
           unitCost,
           stockValue: Math.round(onHand * unitCost * 100) / 100,
         };
