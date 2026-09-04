@@ -50,6 +50,18 @@ interface Location {
   name: string;
   type: string;
   canReceivePurchase: boolean;
+  canSellPos: boolean;
+}
+
+/**
+ * Locations that may hold opening stock for a new product: any location
+ * flagged to receive purchases, or — when the tenant has no receiving
+ * location at all — a retail store that sells at POS (store-only accounts
+ * register products straight into their shop).
+ */
+function receivingTargets(locations: Location[]): Location[] {
+  const hasReceiving = locations.some((l) => l.canReceivePurchase);
+  return locations.filter((l) => l.canReceivePurchase || (!hasReceiving && l.type === 'RETAIL_STORE' && l.canSellPos));
 }
 
 const EMPTY_FORM = {
@@ -440,7 +452,7 @@ export default function ProductsPage() {
 
   const canManageCatalog = can('product.create') || can('product.update');
 
-  const warehouseLocations = locations.filter((l) => l.canReceivePurchase || l.type === 'WAREHOUSE');
+  const openingLocations = receivingTargets(locations);
 
   const isSimpleProductDisplay = (p: Product) => {
     const active = p.variants.filter((v) => v.isActive);
@@ -779,8 +791,11 @@ export default function ProductsPage() {
                     onChange={(e) => setForm({ ...form, openingLocationId: e.target.value })}
                   >
                     <option value="">— choose —</option>
-                    {warehouseLocations.map((l) => (
-                      <option key={l.id} value={l.id}>{l.name}</option>
+                    {openingLocations.map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.name}
+                        {l.type === 'RETAIL_STORE' ? ' (store)' : ''}
+                      </option>
                     ))}
                   </select>
                 </Field>
@@ -817,7 +832,7 @@ export default function ProductsPage() {
                   <input className="input" placeholder="price" type="number" value={draft.price}
                     onChange={(e) => setVariantDrafts(variantDrafts.map((d, i) => (i === index ? { ...d, price: e.target.value } : d)))} />
                   <input className="input" placeholder="qty" type="number" min={0} value={draft.quantity || ''}
-                    onChange={(e) => setVariantDrafts(variantDrafts.map((d, i) => (i === index ? { ...d, quantity: Number(e.target.value), locationId: Number(e.target.value) > 0 && !d.locationId ? (warehouseLocations[0]?.id ?? '') : d.locationId } : d)))} />
+                    onChange={(e) => setVariantDrafts(variantDrafts.map((d, i) => (i === index ? { ...d, quantity: Number(e.target.value), locationId: Number(e.target.value) > 0 && !d.locationId ? (openingLocations[0]?.id ?? '') : d.locationId } : d)))} />
                   <button className="btn-ghost btn-sm"
                     onClick={() => setVariantDrafts(variantDrafts.filter((_, i) => i !== index))} type="button">✕</button>
                   {formErrors[`variant_${index}_label`] && (
@@ -828,7 +843,12 @@ export default function ProductsPage() {
                       <select className="input" value={draft.locationId}
                         onChange={(e) => setVariantDrafts(variantDrafts.map((d, i) => (i === index ? { ...d, locationId: e.target.value } : d)))}>
                         <option value="">— location —</option>
-                        {warehouseLocations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+                        {openingLocations.map((l) => (
+                          <option key={l.id} value={l.id}>
+                            {l.name}
+                            {l.type === 'RETAIL_STORE' ? ' (store)' : ''}
+                          </option>
+                        ))}
                       </select>
                       {formErrors[`variant_${index}_location`] && (
                         <p className="text-xs text-red-500">{formErrors[`variant_${index}_location`]}</p>

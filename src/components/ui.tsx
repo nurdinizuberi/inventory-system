@@ -205,7 +205,7 @@ export function Sparkline({ data }: { data: { date: string; revenue: number }[] 
       {data.map((point) => (
         <div key={point.date} className="group relative flex flex-1 flex-col items-center gap-1">
           <div
-            className="w-full rounded-t bg-ink-900/85 transition group-hover:bg-ink-700"
+            className="w-full rounded-t bg-sky-500/85 transition group-hover:bg-sky-600 dark:bg-sky-400 dark:group-hover:bg-sky-300"
             style={{ height: `${Math.max(4, (point.revenue / max) * 56)}px` }}
             title={`${point.date}: ${currency(point.revenue)}`}
           />

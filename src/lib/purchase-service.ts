@@ -1,6 +1,6 @@
 import { TX_OPTIONS, prisma } from './db';
 import { audit } from './audit';
-import type { GuardContext } from './rbac';
+import { locationCanReceivePurchase, type GuardContext } from './rbac';
 import { recordMovement } from './stock';
 
 /**
@@ -26,7 +26,7 @@ export async function confirmPurchase(purchaseId: string, ctx: GuardContext) {
       if (!record) throw new Error('Purchase not found');
       if (record.status === 'confirmed') return { purchase: record, summary: null };
       if (record.status === 'cancelled') throw new Error('A cancelled purchase cannot be confirmed');
-      if (!record.location.canReceivePurchase) {
+      if (!(await locationCanReceivePurchase(ctx, record.location))) {
         throw new Error(
           `Location "${record.location.name}" cannot receive purchases (can_receive_purchase = false).`,
         );

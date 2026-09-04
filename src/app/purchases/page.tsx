@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { Shell, PageHeader } from '@/components/shell';
 import { Badge, Card, Empty, Field, Modal, TableWrap, statusTone } from '@/components/ui';
@@ -44,6 +45,17 @@ interface LocationOption {
   name: string;
   type: string;
   canReceivePurchase: boolean;
+  canSellPos: boolean;
+}
+
+/**
+ * Locations that may receive a purchase: any location flagged to receive, or
+ * — when the tenant has no receiving location at all — a retail store that
+ * sells at POS (store-only accounts receive stock directly into the shop).
+ */
+function receivingTargets(locations: LocationOption[]): LocationOption[] {
+  const hasReceiving = locations.some((l) => l.canReceivePurchase);
+  return locations.filter((l) => l.canReceivePurchase || (!hasReceiving && l.type === 'RETAIL_STORE' && l.canSellPos));
 }
 
 interface SupplierOption {
@@ -101,7 +113,7 @@ export default function PurchasesPage() {
     void load();
   }, [load]);
 
-  const warehouses = locations.filter((l) => l.canReceivePurchase && l.type === 'WAREHOUSE');
+  const receivingLocations = receivingTargets(locations);
   const total = lines.reduce((sum, line) => sum + (Number(line.quantity) || 0) * (Number(line.unitCost) || 0), 0);
 
   const submit = async (backdateReason?: BackdateReason | null) => {
@@ -122,7 +134,13 @@ export default function PurchasesPage() {
             unitCost: Number(line.unitCost),
           })),
       });
-      toast.push('success', form.confirm ? 'Purchase confirmed — stock received into the warehouse.' : 'Draft purchase saved.');
+      const targetName = locations.find((l) => l.id === form.locationId)?.name;
+      toast.push(
+        'success',
+        form.confirm
+          ? `Purchase confirmed — stock received into ${targetName ?? 'the location'}.`
+          : 'Draft purchase saved.',
+      );
       setOpen(false);
       setLines([]);
       await load();
@@ -154,26 +172,36 @@ export default function PurchasesPage() {
   };
 
   return (
-    <Shell>
-      <PageHeader
-        title="Purchases"
-        description="Recorded against a warehouse. Confirming opens a costed batch per line and writes purchase_in ledger rows."
-        action={
-          can('purchase.create') && (
-            <button
-              className="btn-primary"
-              onClick={() => {
-                setForm({ ...form, locationId: warehouses[0]?.id ?? '', supplierId: suppliers[0]?.id ?? '' });
-                setLines([{ variantId: '', quantity: '1', unitCost: '0' }]);
-                setOpen(true);
-              }}
-              type="button"
-            >
-              New purchase
-            </button>
-          )
-        }
-      />
+    <Shell>        <PageHeader
+          title="Purchases"
+          description="Goods can be received into a warehouse or, for store-only accounts, directly into the shop. Confirming opens a costed batch per line and writes purchase_in ledger rows."
+          action={
+            can('purchase.create') && (
+              <button
+                className="btn-primary"
+                onClick={() => {
+                  setForm({ ...form, locationId: receivingLocations[0]?.id ?? '', supplierId: suppliers[0]?.id ?? '' });
+                  setLines([{ variantId: '', quantity: '1', unitCost: '0' }]);
+                  setOpen(true);
+                }}
+                type="button"
+              >
+                New purchase
+              </button>
+            )
+          }
+        />
+
+      {receivingLocations.length === 0 && (
+        <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
+          No location can receive purchases yet. Open{' '}
+          <Link className="underline" href="/locations">
+            Locations
+          </Link>{' '}
+          and enable “Can receive purchases” on your warehouse or shop, or create one — store-only accounts can
+          receive stock directly into their store.
+        </div>
+      )}
 
       <div className="mb-4 flex gap-2">
         {['all', 'draft', 'confirmed', 'cancelled'].map((status) => (
@@ -191,15 +219,14 @@ export default function PurchasesPage() {
       <Card>
         {purchases.length === 0 ? (
           <Empty message="No purchase orders in this view." />
-        ) : (
-          <TableWrap>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Number</th>
-                  <th>Supplier</th>
-                  <th>Warehouse</th>
-                  <th>Date</th>
+        ) : (            <TableWrap>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Number</th>
+                    <th>Supplier</th>
+                    <th>Receive at</th>
+                    <th>Date</th>
                   <th className="text-right">Lines</th>
                   <th className="text-right">Total</th>
                   <th>Status</th>
@@ -288,14 +315,16 @@ export default function PurchasesPage() {
                 ))}
               </select>
             </Field>
-            <Field label="Receiving warehouse" hint="Only locations with can_receive_purchase">
+            <Field label="Receiving location" hint="Warehouses and receiving-enabled stores">
               <select className="input" value={form.locationId} onChange={(e) => setForm({ ...form, locationId: e.target.value })}>
                 <option value="">Select…</option>
-                {warehouses.map((location) => (
+                {receivingLocations.map((location) => (
                   <option key={location.id} value={location.id}>
                     {location.name}
+                    {location.type === 'RETAIL_STORE' ? ' (store)' : ''}
                   </option>
                 ))}
+                {receivingLocations.length === 0 && <option disabled>No receiving location — see Locations page</option>}
               </select>
             </Field>
             <Field label="On confirm">
@@ -403,7 +432,7 @@ export default function PurchasesPage() {
                 <p>{detail.supplier.name}</p>
               </div>
               <div>
-                <span className="label">Warehouse</span>
+                <span className="label">Received at</span>
                 <p>{detail.location.name}</p>
               </div>
               <div>

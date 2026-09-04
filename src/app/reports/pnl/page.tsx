@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { PageHeader } from '@/components/shell';
+import { HBarList } from '@/components/charts';
+import { ExportButtons, money, pctText } from '@/components/report-tools';
 import { Card, Empty, Kpi, TableWrap } from '@/components/ui';
 import { api, errorMessage } from '@/lib/client';
 import { useToast } from '@/components/toast';
@@ -60,6 +62,44 @@ export default function PnlReportPage() {
             <input className="input w-40" type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
             <span className="text-ink-400 dark:text-ink-500">→</span>
             <input className="input w-40" type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+            {data && (
+              <ExportButtons
+                label="Export"
+                csvFilename={`pnl-report-${from}-to-${to}`}
+                csvHeaders={['Location', 'Revenue', 'Cost of goods', 'Profit', 'Margin %']}
+                csvRows={data.byLocation.map((row) => [row.location, row.revenue, row.cogs, row.profit, Number(row.margin.toFixed(1))])}
+                print={{
+                  title: 'Profit & loss report',
+                  subtitle: <>Period {from} → {to}</>,
+                  blocks: [
+                    {
+                      title: 'Statement',
+                      headers: ['Line', 'Amount'],
+                      rows: [
+                        ['Revenue', money(data.revenue)],
+                        ['Discounts given', money(-data.discounts)],
+                        ['Cost of goods sold (FIFO)', money(-data.cogs)],
+                        ['Gross profit', money(data.grossProfit)],
+                        ['Refunds on returns', money(-data.refunds)],
+                        ['Damaged write-offs', money(-data.damagedWriteOff)],
+                        ['Stock shrinkage (adjustments)', money(-data.shrinkage)],
+                        ['Net profit', money(data.netProfit)],
+                      ],
+                    },
+                    {
+                      title: 'Shrinkage by reason',
+                      headers: ['Reason', 'Units', 'Cost impact'],
+                      rows: data.shrinkageByReason.map((row) => [row.reason.replace(/_/g, ' '), row.units, money(-row.value)]),
+                    },
+                    {
+                      title: 'By location',
+                      headers: ['Location', 'Revenue', 'Cost of goods', 'Profit', 'Margin'],
+                      rows: data.byLocation.map((row) => [row.location, money(row.revenue), money(row.cogs), money(row.profit), pctText(row.margin)]),
+                    },
+                  ],
+                }}
+              />
+            )}
           </div>
         }
       />
@@ -74,6 +114,19 @@ export default function PnlReportPage() {
             <Kpi label="Gross margin" value={`${data.grossMargin.toFixed(1)}%`} />
             <Kpi label="Net profit" value={currency(data.netProfit)} tone={data.netProfit >= 0 ? 'good' : 'bad'} />
           </div>
+
+          {data.byLocation.length > 0 && (
+            <Card title="Profit by location">
+              <HBarList
+                items={[...data.byLocation]
+                  .sort((a, b) => b.profit - a.profit)
+                  .slice(0, 10)
+                  .map((row) => ({ label: row.location, value: row.profit, hint: `${pctText(row.margin)} margin · ${currency(row.revenue)} revenue` }))}
+                format={(v) => currency(v)}
+                color="emerald"
+              />
+            </Card>
+          )}
 
           <div className="grid gap-5 lg:grid-cols-2">
             <Card title="Statement">

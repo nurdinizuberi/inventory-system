@@ -56,7 +56,17 @@ export async function POST(request: Request) {
 
     const data = parsed.data;
     // Capability flags follow the location type unless explicitly overridden.
-    const canReceivePurchase = data.canReceivePurchase ?? data.type === 'WAREHOUSE';
+    // A retail store also receives purchases when the tenant has no receiving
+    // location yet (store-only accounts can stock the shop directly). Only
+    // inferred inside a tenant context — platform-wide locations keep defaults.
+    const hasReceiving = ctx.tenantId
+      ? (await prisma.location.count({
+          where: { tenantId: ctx.tenantId, canReceivePurchase: true },
+        })) > 0
+      : true;
+    const canReceivePurchase =
+      data.canReceivePurchase ??
+      (data.type === 'WAREHOUSE' || (data.type === 'RETAIL_STORE' && !hasReceiving));
     const canSellPos = data.canSellPos ?? data.type === 'RETAIL_STORE';
 
     const location = await prisma.location.create({

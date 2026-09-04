@@ -64,8 +64,10 @@ export async function GET(request: Request) {
 }
 
 /**
- * Create a purchase order against a warehouse. `confirmImmediately` also runs
- * the goods-receipt step (batch creation + purchase_in ledger rows).
+ * Create a purchase order against a receiving location (a warehouse, or a
+ * store flagged / falling back to receive direct deliveries).
+ * `confirmImmediately` also runs the goods-receipt step (batch creation +
+ * purchase_in ledger rows).
  */
 export async function POST(request: Request) {
   try {
@@ -74,8 +76,10 @@ export async function POST(request: Request) {
     if (!parsed.success) return badRequest(parsed.error.issues.map((i) => i.message).join(', '));
     const data = parsed.data;
 
-    // Server-side capability check: only warehouses may receive purchases.
-    await assertLocationAccess(ctx, data.locationId, { canReceivePurchase: true });
+    // Server-side capability check: warehouses receive purchases, and retail
+    // stores may too when flagged or when the tenant has no other receiving
+    // location (store-only accounts receive directly into the shop).
+    await assertLocationAccess(ctx, data.locationId, { canReceivePurchase: true, allowDirectToStore: true });
 
     const supplier = await prisma.supplier.findFirst({ where: { id: data.supplierId, ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}) } });
     if (!supplier || !supplier.isActive) return badRequest('Supplier not found or inactive');

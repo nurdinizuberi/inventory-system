@@ -90,3 +90,25 @@ body {
     @apply text-sm text-ink-500 dark:text-ink-400;
   }
 }
+
+/* ---------------------------------------------------------------------------
+ * Report print-to-PDF. #print-root is portaled to <body> by ReportPrint;
+ * on screen it stays hidden, and during printing only it is shown while the
+ * rest of the app is suppressed. The dark theme is stripped by JS before
+ * printing, so output is always light on white paper.
+ * --------------------------------------------------------------------------- */
+#print-root {
+  display: none;
+}
+
+@media print {
+  body {
+    background: #fff !important;
+  }
+  body > *:not(#print-root) {
+    display: none !important;
+  }
+  #print-root {
+    display: block !important;
+  }
+}

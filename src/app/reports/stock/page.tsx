@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { PageHeader } from '@/components/shell';
+import { HBarList } from '@/components/charts';
+import { ExportButtons, money } from '@/components/report-tools';
 import { Badge, Card, Empty, Kpi, TableWrap } from '@/components/ui';
 import { api, errorMessage } from '@/lib/client';
 import { useToast } from '@/components/toast';
@@ -76,6 +78,32 @@ export default function StockReportPage() {
 
   const visible = hideZero ? rows.filter((row) => row.onHand !== 0) : rows;
 
+  // Aggregations for the charts above the table.
+  const locationKeys = [...new Set(visible.map((row) => row.locationName))];
+  const byLocation = locationKeys.length > 1;
+  const keyOf = (row: Row) => (byLocation ? row.locationName : (row.category ?? 'Uncategorised'));
+  const groupTotals = new Map<string, { label: string; units: number; value: number }>();
+  for (const row of visible) {
+    const key = keyOf(row);
+    const entry = groupTotals.get(key) ?? { label: key, units: 0, value: 0 };
+    entry.units += row.onHand;
+    entry.value += row.stockValue;
+    groupTotals.set(key, entry);
+  }
+  const valueGroups = [...groupTotals.values()]
+    .filter((g) => g.units !== 0)
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 10)
+    .map((g) => ({ label: g.label, value: Math.round(g.value * 100) / 100, hint: `${g.units.toLocaleString()} unit(s)` }));
+  const topLines = [...visible]
+    .sort((a, b) => b.stockValue - a.stockValue)
+    .slice(0, 10)
+    .map((row) => ({
+      label: `${row.productName} — ${row.variantLabel}`,
+      value: row.stockValue,
+      hint: row.locationName,
+    }));
+
   return (
     <>
       <PageHeader
@@ -109,6 +137,68 @@ export default function StockReportPage() {
               <input type="checkbox" checked={hideZero} onChange={(e) => setHideZero(e.target.checked)} />
               hide empty
             </label>
+            {visible.length > 0 && (
+              <ExportButtons
+                label="Export"
+                csvFilename={`stock-report-${locationId || 'all-locations'}${asOfDate ? `-asof-${asOfDate}` : ''}`}
+                csvHeaders={['Product', 'Variant', 'Category', 'SKU', 'Location', 'On hand', 'Reserved', 'Sellable', 'Sold', 'Unit cost', 'Value', 'Flag']}
+                csvRows={visible.map((row) => [
+                  row.productName,
+                  row.variantLabel,
+                  row.category ?? '',
+                  row.sku,
+                  row.locationName,
+                  row.onHand,
+                  row.reserved,
+                  row.sellable,
+                  row.sold,
+                  row.unitCost,
+                  row.stockValue,
+                  row.outOfStock ? 'out of stock' : row.lowStock ? `low (<= ${row.lowStockThreshold})` : 'ok',
+                ])}
+                print={{
+                  title: 'Current stock report',
+                  subtitle: (
+                    <>
+                      {locationId ? `Location: ${locations.find((l) => l.id === locationId)?.name ?? locationId}` : 'All locations'}
+                      {onlyLow ? ' · low stock only' : ''}
+                      {asOfDate ? ` · as of ${asOfDate}` : ' · now'}
+                      {query.trim() ? ` · search “${query.trim()}”` : ''}
+                    </>
+                  ),
+                  blocks: [
+                    {
+                      title: 'Summary',
+                      headers: ['Metric', 'Value'],
+                      rows: [
+                        ['Units on hand', String(totals.units)],
+                        ['Stock value (latest purchase cost)', money(totals.value)],
+                        ['Low stock lines', String(totals.lowStock)],
+                        ['Out of stock', String(totals.outOfStock)],
+                      ],
+                    },
+                    {
+                      title: `Stock lines (${visible.length})`,
+                      headers: ['Product', 'Variant', 'Category', 'SKU', 'Location', 'On hand', 'Reserved', 'Sellable', 'Sold', 'Unit cost', 'Value', 'Flag'],
+                      rows: visible.map((row) => [
+                        row.productName,
+                        row.variantLabel,
+                        row.category ?? '',
+                        row.sku,
+                        row.locationName,
+                        String(row.onHand),
+                        String(row.reserved),
+                        String(row.sellable),
+                        String(row.sold),
+                        money(row.unitCost),
+                        money(row.stockValue),
+                        row.outOfStock ? 'out of stock' : row.lowStock ? `low (<= ${row.lowStockThreshold})` : 'ok',
+                      ]),
+                    },
+                  ],
+                }}
+              />
+            )}
           </div>
         }
       />
@@ -119,6 +209,17 @@ export default function StockReportPage() {
         <Kpi label="Low stock lines" value={totals.lowStock} tone={totals.lowStock ? 'warn' : 'good'} />
         <Kpi label="Out of stock" value={totals.outOfStock} tone={totals.outOfStock ? 'bad' : 'good'} />
       </div>
+
+      {valueGroups.length > 0 && (
+        <div className="mb-5 grid gap-5 lg:grid-cols-2">
+          <Card title={byLocation ? 'Stock value by location' : 'Stock value by category'}>
+            <HBarList items={valueGroups} format={(v) => currency(v)} color="sky" />
+          </Card>
+          <Card title="Top stock lines by value">
+            <HBarList items={topLines} format={(v) => currency(v)} color="emerald" />
+          </Card>
+        </div>
+      )}
 
       <Card>
         {visible.length === 0 ? (

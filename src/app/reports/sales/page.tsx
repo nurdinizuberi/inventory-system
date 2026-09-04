@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { PageHeader } from '@/components/shell';
+import { Bars, HBarList } from '@/components/charts';
+import { ExportButtons, money, pctText } from '@/components/report-tools';
 import { Card, Empty, Kpi, TableWrap } from '@/components/ui';
 import { api, errorMessage } from '@/lib/client';
 import { useToast } from '@/components/toast';
@@ -68,6 +70,55 @@ export default function SalesReportPage() {
               <option value="cashier">By cashier</option>
               <option value="variant">By variant</option>
             </select>
+            {data && (
+              <ExportButtons
+                label="Export"
+                csvFilename={`sales-report-${from}-to-${to}`}
+                csvHeaders={[groupBy, 'Txns', 'Units', 'Revenue', 'Discounts', 'Cost', 'Profit', 'Margin %']}
+                csvRows={[
+                  ...data.buckets.map((b) => [b.label, b.transactions, b.units, b.revenue, b.discount, b.cost, b.profit, Number(b.margin.toFixed(1))]),
+                  ['Total', data.totals.transactions, data.totals.units, data.totals.revenue, data.totals.discount, data.totals.cost, data.totals.profit, Number(data.totals.margin.toFixed(1))],
+                ]}
+                print={{
+                  title: 'Sales report',
+                  subtitle: (
+                    <>
+                      Period {from} → {to} · grouped by {groupBy}
+                      {includeBackdated ? ' · includes backdated entries' : ''}
+                    </>
+                  ),
+                  blocks: [
+                    {
+                      title: 'Summary',
+                      headers: ['Metric', 'Value'],
+                      rows: [
+                        ['Revenue', money(data.totals.revenue)],
+                        ['Cost of goods (FIFO)', money(data.totals.cost)],
+                        ['Gross profit', money(data.totals.profit)],
+                        ['Margin', pctText(data.totals.margin)],
+                        ['Transactions', String(data.totals.transactions)],
+                        ['Units sold', String(data.totals.units)],
+                      ],
+                    },
+                    {
+                      title: `Breakdown by ${groupBy}`,
+                      headers: [groupBy, 'Txns', 'Units', 'Revenue', 'Discounts', 'Cost', 'Profit', 'Margin'],
+                      rows: data.buckets.map((b) => [b.label, b.transactions, b.units, money(b.revenue), money(b.discount), money(b.cost), money(b.profit), pctText(b.margin)]),
+                    },
+                    {
+                      title: 'Best sellers by profit',
+                      headers: ['Variant', 'Units', 'Revenue', 'Profit'],
+                      rows: data.topSellers.map((row) => [row.variant, row.units, money(row.revenue), money(row.profit)]),
+                    },
+                    {
+                      title: 'Recent tickets',
+                      headers: ['Ticket', 'Date', 'Location', 'Cashier', 'Items', 'Total'],
+                      rows: data.recent.map((sale) => [sale.number, formatDate(sale.soldAt, true), sale.location, sale.cashier, sale.items, money(sale.total)]),
+                    },
+                  ],
+                }}
+              />
+            )}
           </div>
         }
       />
@@ -88,6 +139,37 @@ export default function SalesReportPage() {
             <Kpi label="Margin" value={`${data.totals.margin.toFixed(1)}%`} />
             <Kpi label="Transactions" value={data.totals.transactions} hint={`${data.totals.units} units`} />
           </div>
+
+          <Card title={groupBy === 'day' ? 'Revenue & profit by day' : `Revenue by ${groupBy === 'location' ? 'location' : groupBy === 'cashier' ? 'cashier' : 'variant'}`}>
+            {data.buckets.length === 0 ? (
+              <Empty message="No sales in this period." />
+            ) : groupBy === 'day' ? (
+              <Bars
+                height={220}
+                data={data.buckets.map((bucket) => ({
+                  label: bucket.label.slice(5),
+                  values: [
+                    { key: 'revenue', name: 'Revenue', value: bucket.revenue, color: 'sky' },
+                    { key: 'profit', name: 'Profit', value: bucket.profit, color: 'emerald' },
+                  ],
+                }))}
+                format={(v) => currency(v)}
+                legend={[
+                  { name: 'Revenue', color: 'sky' },
+                  { name: 'Profit', color: 'emerald' },
+                ]}
+              />
+            ) : (
+              <HBarList
+                items={[...data.buckets]
+                  .sort((a, b) => b.revenue - a.revenue)
+                  .slice(0, 12)
+                  .map((b) => ({ label: b.label, value: b.revenue, hint: `${b.transactions} transaction(s)` }))}
+                format={(v) => currency(v)}
+                color="sky"
+              />
+            )}
+          </Card>
 
           <div className="grid gap-5 lg:grid-cols-2">
             <Card title="Best sellers by profit">

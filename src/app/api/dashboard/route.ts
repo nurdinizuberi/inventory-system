@@ -9,33 +9,41 @@ export async function GET() {
   try {
     const ctx = await guard({ action: 'stock.view' });
     const scope = scopedLocationIds(ctx);
+    // Tenant isolation: location-scoped roles see their assigned locations, any
+    // other tenant user sees every location that belongs to their tenant — never
+    // another tenant's locations, regardless of role.
+    const tenantFilter = ctx.tenantId ? { tenantId: ctx.tenantId } : {};
 
     const locations = await prisma.location.findMany({
-      where: { isActive: true, ...(scope ? { id: { in: scope } } : {}) },
+      where: { isActive: true, ...tenantFilter, ...(scope ? { id: { in: scope } } : {}) },
       orderBy: [{ type: 'asc' }, { name: 'asc' }],
     });
     const locationIds = locations.map((l) => l.id);
+    // Effective location scope used to filter sales/stock/batches/movements.
+    // Null = no location filter (only reachable for non-tenant global admins).
+    const effective = scope ?? (ctx.tenantId ? locationIds : null);
+    const inEffective = effective ? { locationId: { in: effective } } : {};
 
     const [salesToday, sales7, pendingAdjustments, inTransit, drafts] = await Promise.all([
       prisma.sale.aggregate({
-        where: { status: 'completed', soldAt: { gte: todayStart() }, ...(scope ? { locationId: { in: scope } } : {}) },
+        where: { status: 'completed', soldAt: { gte: todayStart() }, ...inEffective },
         _sum: { total: true, profit: true, totalCost: true },
         _count: true,
       }),
       prisma.sale.findMany({
-        where: { status: 'completed', soldAt: { gte: daysAgo(7) }, ...(scope ? { locationId: { in: scope } } : {}) },
+        where: { status: 'completed', soldAt: { gte: daysAgo(7) }, ...inEffective },
         include: { location: true },
       }),
       prisma.stockAdjustment.count({
-        where: { status: 'pending', ...(scope ? { locationId: { in: scope } } : {}) },
+        where: { status: 'pending', ...inEffective },
       }),
       prisma.stockTransfer.count({
         where: {
           status: 'in_transit',
-          ...(scope ? { OR: [{ fromLocationId: { in: scope } }, { toLocationId: { in: scope } }] } : {}),
+          ...(effective ? { OR: [{ fromLocationId: { in: effective } }, { toLocationId: { in: effective } }] } : {}),
         },
       }),
-      prisma.purchase.count({ where: { status: 'draft', ...(scope ? { locationId: { in: scope } } : {}) } }),
+      prisma.purchase.count({ where: { status: 'draft', ...inEffective } }),
     ]);
 
     const stock = await getStockMatrix(prisma, { locationIds });
@@ -69,7 +77,7 @@ export async function GET() {
       .slice(0, 12);
 
     const lots = await prisma.batch.findMany({
-      where: { remainingQty: { gt: 0 }, ...(locationIds.length ? { locationId: { in: locationIds } } : {}) },
+      where: { remainingQty: { gt: 0 }, ...(effective ? { locationId: { in: effective } } : {}) },
     });
     const inventoryValue = round2(lots.reduce((s, b) => s + b.remainingQty * b.unitCost, 0));
     const unitsOnHand = stock.reduce((s, r) => s + r.onHand, 0);
@@ -89,7 +97,7 @@ export async function GET() {
     }
 
     const recentMovements = await prisma.stockMovement.findMany({
-      where: { ...(scope ? { locationId: { in: scope } } : {}) },
+      where: { ...inEffective },
       include: { variant: { include: { product: true } }, location: true },
       orderBy: { createdAt: 'desc' },
       take: 12,

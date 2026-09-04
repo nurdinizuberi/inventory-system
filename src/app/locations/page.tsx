@@ -33,6 +33,26 @@ const EMPTY = {
   canSellPos: true,
 };
 
+/**
+ * Sensible capability defaults for a new location: a warehouse receives
+ * purchases, a retail store sells at POS — and a store is also enabled to
+ * receive purchases when the tenant has no receiving location yet, so
+ * store-only accounts can stock their shop without a warehouse.
+ */
+function withDefaults(
+  type: LocationType,
+  existing: Location[],
+): typeof EMPTY {
+  const hasReceiving = existing.some((l) => l.canReceivePurchase);
+  return {
+    ...EMPTY,
+    type,
+    canReceivePurchase:
+      type === 'WAREHOUSE' ? true : type === 'RETAIL_STORE' ? !hasReceiving : false,
+    canSellPos: type === 'RETAIL_STORE',
+  };
+}
+
 export default function LocationsPage() {
   const { can } = useAuth();
   const toast = useToast();
@@ -77,10 +97,17 @@ export default function LocationsPage() {
     <Shell>
       <PageHeader
         title="Locations"
-        description="Warehouses and retail stores share one schema — only the capability flags differ."
+        description="Warehouses and retail stores share one schema — only the capability flags differ. A store is automatically enabled to receive purchases when no warehouse exists, so store-only accounts can register stock directly into the shop."
         action={
           can('location.manage') && (
-            <button className="btn-primary" onClick={() => setOpen(true)} type="button">
+            <button
+              className="btn-primary"
+              onClick={() => {
+                setForm(withDefaults('RETAIL_STORE', locations));
+                setOpen(true);
+              }}
+              type="button"
+            >
               New location
             </button>
           )
@@ -168,12 +195,7 @@ export default function LocationsPage() {
                 value={form.type}
                 onChange={(e) => {
                   const type = e.target.value as LocationType;
-                  setForm({
-                    ...form,
-                    type,
-                    canReceivePurchase: type === 'WAREHOUSE',
-                    canSellPos: type === 'RETAIL_STORE',
-                  });
+                  setForm({ ...withDefaults(type, locations), code: form.code, name: form.name, address: form.address, phone: form.phone });
                 }}
               >
                 <option value="WAREHOUSE">Warehouse</option>
@@ -199,12 +221,21 @@ export default function LocationsPage() {
                 onChange={(e) => setForm({ ...form, canReceivePurchase: e.target.checked })}
               />
               Can receive purchases
+              {form.type === 'RETAIL_STORE' && form.canReceivePurchase && (
+                <span className="text-xs text-ink-400 dark:text-ink-500">(auto-enabled — no warehouse yet)</span>
+              )}
             </label>
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={form.canSellPos} onChange={(e) => setForm({ ...form, canSellPos: e.target.checked })} />
               Can sell at POS
             </label>
           </div>
+          {form.type === 'RETAIL_STORE' && !form.canReceivePurchase && (
+            <p className="text-xs text-amber-600 dark:text-amber-400">
+              This store will not be able to receive purchases or opening stock unless enabled above or a warehouse
+              exists.
+            </p>
+          )}
         </div>
       </Modal>
     </Shell>
