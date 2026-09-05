@@ -34,6 +34,8 @@ export const MOVEMENT_TYPES = [
   'reservation_release',
   'adjustment',
   'opening_stock',
+  'revaluation',
+  'product_edit',
 ] as const;
 export type MovementType = (typeof MOVEMENT_TYPES)[number];
 
@@ -48,6 +50,8 @@ export const MOVEMENT_LABELS: Record<MovementType, string> = {
   reservation_release: 'Reservation Release',
   adjustment: 'Adjustment',
   opening_stock: 'Opening Stock',
+  revaluation: 'Cost Revaluation',
+  product_edit: 'Product Edit',
 };
 
 export const MOVEMENT_STATUS = ['available', 'reserved', 'sold'] as const;

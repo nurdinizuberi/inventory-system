@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { audit } from '@/lib/audit';
-import { prisma } from '@/lib/db';
-import { badRequest, guard, jsonError } from '@/lib/rbac';
+import { TX_OPTIONS, prisma } from '@/lib/db';
+import { assertAction, assertLocationAccess, badRequest, guard, jsonError } from '@/lib/rbac';
 import { getStockMatrix } from '@/lib/stock';
+import { adjustVariantStock } from '@/lib/stock-edit';
 import { generateBarcode, generateSku } from '@/lib/utils';
 
 const createSchema = z.object({
@@ -15,6 +16,11 @@ const createSchema = z.object({
   costPrice: z.coerce.number().min(0).nullable().optional(),
   sellingPrice: z.coerce.number().min(0).nullable().optional(),
   lowStockThreshold: z.coerce.number().int().min(0).default(10),
+  /** Initial on-hand quantity when created from the product editor. */
+  quantity: z.coerce.number().int().optional(),
+  locationId: z.string().optional(),
+  /** Reason for the initial stock (required when quantity > 0). */
+  reason: z.string().optional(),
 });
 
 /** Flat, POS-friendly list of sellable variants with per-location stock. */
@@ -122,6 +128,14 @@ export async function POST(request: Request) {
     });
     if (!product) return badRequest('Product not found');
 
+    const quantity = data.quantity ?? 0;
+    if (quantity > 0) {
+      if (!data.locationId) return badRequest('A location is required for opening stock.');
+      if (!data.reason?.trim()) return badRequest('A reason is required for opening stock.');
+      await assertAction(ctx, 'stock.adjust');
+      await assertLocationAccess(ctx, data.locationId);
+    }
+
     // A new variant is sold and valued on its own. It may inherit the product
     // default only when that default is itself greater than 0 — otherwise a blank
     // price/cost would silently sell or value the variant at 0.
@@ -139,21 +153,41 @@ export async function POST(request: Request) {
     const sku = data.sku?.trim() || generateSku(product.name, data.attributes, product.variants.length + 1);
     const barcode = data.barcode?.trim() || generateBarcode(sku);
 
-    const variant = await prisma.variant.create({
-      data: {
-        tenantId: ctx.tenantId ?? null,
-        productId: product.id,
-        attributes: JSON.stringify(data.attributes),
-        label,
-        sku,
-        barcode,
-        costPrice: data.costPrice ?? null,
-        sellingPrice: data.sellingPrice ?? null,
-        lowStockThreshold: data.lowStockThreshold,
-        isDefault: product.variants.length === 0,
-      },
-      include: { product: true },
-    });
+    const variant = await prisma.$transaction(async (tx) => {
+      const created = await tx.variant.create({
+        data: {
+          tenantId: ctx.tenantId ?? null,
+          productId: product.id,
+          attributes: JSON.stringify(data.attributes),
+          label,
+          sku,
+          barcode,
+          costPrice: data.costPrice ?? null,
+          sellingPrice: data.sellingPrice ?? null,
+          lowStockThreshold: data.lowStockThreshold,
+          isDefault: product.variants.length === 0,
+        },
+        include: { product: true },
+      });
+
+      if (quantity > 0) {
+        const effectiveCost = created.costPrice ?? created.product.costPrice ?? 0;
+        await adjustVariantStock(tx, {
+          variantId: created.id,
+          locationId: data.locationId as string,
+          delta: quantity,
+          unitCost: effectiveCost,
+          reason: (data.reason as string).trim(),
+          referenceLabel: `${created.product.name} — ${created.label}`,
+          referenceId: created.id,
+          referenceType: 'variant',
+          tenantId: ctx.tenantId ?? null,
+          createdById: ctx.id,
+        });
+      }
+
+      return created;
+    }, TX_OPTIONS);
 
     await audit({
       ctx,
@@ -162,6 +196,7 @@ export async function POST(request: Request) {
       entityId: variant.id,
       entityLabel: `${product.name} — ${label}`,
       after: variant,
+      metadata: quantity > 0 ? { openingQuantity: quantity, openingLocationId: data.locationId, reason: data.reason } : undefined,
     });
 
     return NextResponse.json({ variant }, { status: 201 });

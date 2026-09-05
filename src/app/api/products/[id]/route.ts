@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { audit } from '@/lib/audit';
-import { prisma } from '@/lib/db';
-import { badRequest, guard, jsonError } from '@/lib/rbac';
+import { TX_OPTIONS, prisma } from '@/lib/db';
+import { assertAction, badRequest, guard, jsonError } from '@/lib/rbac';
 import { getStockMatrix } from '@/lib/stock';
+import { revalueVariantBatches } from '@/lib/stock-edit';
 
 const updateSchema = z.object({
   name: z.string().min(2).optional(),
@@ -13,6 +14,8 @@ const updateSchema = z.object({
   costPrice: z.coerce.number().min(0).optional(),
   optionNames: z.array(z.string()).optional(),
   isActive: z.boolean().optional(),
+  /** Reason for a cost change (required when the default cost revalues stock). */
+  reason: z.string().optional(),
 });
 
 type Params = { params: Promise<{ id: string }> };
@@ -52,6 +55,19 @@ export async function PATCH(request: Request, { params }: Params) {
     if (!before) return NextResponse.json({ error: 'Product not found' }, { status: 404 });
 
     const payload = parsed.data;
+    // A product-level cost change revalues the stock of every active variant
+    // that inherits it (effective cost per variant = its own cost else the new
+    // default). This leaves the physical quantities untouched and only adjusts
+    // the cost basis, with a zero-quantity `revaluation` ledger row per variant
+    // for auditability.
+    const revalueCost =
+      payload.costPrice !== undefined && payload.costPrice > 0 && payload.costPrice !== before.costPrice
+        ? payload.costPrice
+        : null;
+    if (revalueCost !== null) {
+      await assertAction(ctx, 'stock.adjust');
+      if (!payload.reason?.trim()) return badRequest('A reason is required for cost changes.');
+    }
     // Changing the product-level defaults can silently zero out any active variant
     // that inherits them, so when a default actually changes, make sure every
     // sellable variant still ends up with a selling price and cost greater than 0
@@ -73,19 +89,40 @@ export async function PATCH(request: Request, { params }: Params) {
       }
     }
 
-    const product = await prisma.product.update({
-      where: { id },
-      data: {
-        ...(payload.name !== undefined ? { name: payload.name.trim() } : {}),
-        ...(payload.description !== undefined ? { description: payload.description } : {}),
-        ...(payload.categoryId !== undefined ? { categoryId: payload.categoryId || null } : {}),
-        ...(payload.basePrice !== undefined ? { basePrice: payload.basePrice } : {}),
-        ...(payload.costPrice !== undefined ? { costPrice: payload.costPrice } : {}),
-        ...(payload.optionNames !== undefined ? { optionNames: payload.optionNames.filter(Boolean).join(',') } : {}),
-        ...(payload.isActive !== undefined ? { isActive: payload.isActive } : {}),
-      },
-      include: { variants: true, category: true },
-    });
+    const product = await prisma.$transaction(async (tx) => {
+      const updated = await tx.product.update({
+        where: { id },
+        data: {
+          ...(payload.name !== undefined ? { name: payload.name.trim() } : {}),
+          ...(payload.description !== undefined ? { description: payload.description } : {}),
+          ...(payload.categoryId !== undefined ? { categoryId: payload.categoryId || null } : {}),
+          ...(payload.basePrice !== undefined ? { basePrice: payload.basePrice } : {}),
+          ...(payload.costPrice !== undefined ? { costPrice: payload.costPrice } : {}),
+          ...(payload.optionNames !== undefined ? { optionNames: payload.optionNames.filter(Boolean).join(',') } : {}),
+          ...(payload.isActive !== undefined ? { isActive: payload.isActive } : {}),
+        },
+        include: { variants: true, category: true },
+      });
+
+      if (revalueCost !== null) {
+        for (const v of before.variants) {
+          const effectiveCost = v.costPrice ?? revalueCost;
+          if (effectiveCost <= 0) continue;
+          await revalueVariantBatches(tx, {
+            variantId: v.id,
+            newCost: effectiveCost,
+            reason: (payload.reason as string).trim(),
+            referenceLabel: `${updated.name} — ${v.label}`,
+            referenceId: v.id,
+            referenceType: 'variant',
+            tenantId: ctx.tenantId ?? null,
+            createdById: ctx.id,
+          });
+        }
+      }
+
+      return updated;
+    }, TX_OPTIONS);
 
     await audit({
       ctx,
@@ -95,6 +132,7 @@ export async function PATCH(request: Request, { params }: Params) {
       entityLabel: product.name,
       before,
       after: product,
+      metadata: revalueCost !== null ? { revaluation: revalueCost, reason: payload.reason } : undefined,
     });
 
     return NextResponse.json({ product });

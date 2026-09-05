@@ -86,6 +86,14 @@ interface VariantEdit {
   lowStock: string;
   isActive: boolean;
   isNew: boolean;
+  /** Signed quantity delta for existing variants ('' = unchanged). */
+  qty: string;
+  /** Location a qty change applies to. */
+  locationId: string;
+  /** Total units on hand (used to sanity-check a deduction). */
+  onHand: number;
+  /** Cost the row opened with, so we can detect a revaluation. */
+  origCost: number | null;
 }
 
 export default function ProductsPage() {
@@ -109,6 +117,8 @@ export default function ProductsPage() {
   const [editing, setEditing] = useState<Product | null>(null);
   const [editForm, setEditForm] = useState(EMPTY_FORM);
   const [editVariants, setEditVariants] = useState<VariantEdit[]>([]);
+  const [editReason, setEditReason] = useState('');
+  const origProductCost = useRef<number | null>(null);
 
   // Category management
   const [catOpen, setCatOpen] = useState(false);
@@ -292,6 +302,8 @@ export default function ProductsPage() {
 
   const openEdit = (product: Product) => {
     setEditing(product);
+    setEditReason('');
+    origProductCost.current = product.costPrice;
     const active = product.variants.filter((v) => v.isActive);
     const isSimple = active.length === 1 && active[0].isDefault && active[0].label === 'Standard';
     const defaultVariant = isSimple ? active[0] : undefined;
@@ -327,6 +339,10 @@ export default function ProductsPage() {
           lowStock: String(v.lowStockThreshold),
           isActive: v.isActive,
           isNew: false,
+          qty: '',
+          locationId: locations[0]?.id ?? '',
+          onHand: (v.stock ?? []).reduce((s, r) => s + r.onHand, 0),
+          origCost: v.costPrice,
         };
       }),
     );
@@ -357,6 +373,27 @@ export default function ProductsPage() {
       toast.push('error', 'Every variant needs a selling price and cost greater than 0.');
       return;
     }
+    // Quantity edits must be integers; a new variant can only open with stock
+    // (never negative initial); every quantity change needs a location.
+    for (const v of editVariants) {
+      const q = editQtyNum(v);
+      if (q !== 0 && !Number.isInteger(q)) {
+        toast.push('error', 'Quantity changes must be whole numbers.');
+        return;
+      }
+      if (v.isNew && q < 0) {
+        toast.push('error', 'A new variant cannot start with negative stock.');
+        return;
+      }
+      if ((v.isNew ? q > 0 : q !== 0) && !v.locationId) {
+        toast.push('error', 'Choose a location for every quantity change.');
+        return;
+      }
+    }
+    if (reasonRequired) {
+      toast.push('error', 'A reason is required for cost or quantity changes.');
+      return;
+    }
     setBusy(true);
     try {
       const newOptionNames = editForm.optionNames.split(',').map((s) => s.trim()).filter(Boolean);
@@ -369,6 +406,9 @@ export default function ProductsPage() {
           costPrice: writeProductPrices ? Number(editForm.costPrice || 0) : 0,
           categoryId: editForm.categoryId || null,
           optionNames: newOptionNames,
+          ...(showProductPrices && Number(editForm.costPrice) !== origProductCost.current
+            ? { reason: editReason.trim() }
+            : {}),
         });
 
       const updateVariants = async () => {
@@ -381,12 +421,19 @@ export default function ProductsPage() {
             costPrice: v.cost !== '' ? Number(v.cost) : null,
             sellingPrice: v.price !== '' ? Number(v.price) : null,
             lowStockThreshold: Number(v.lowStock) || 10,
+            ...(editCostChanged(v) || editQtyChanged(v) ? { reason: editReason.trim() } : {}),
+            ...(editQtyChanged(v) ? { stockLocationId: v.locationId } : {}),
+            ...(editQtyChanged(v) && !v.isNew ? { quantityDelta: editQtyNum(v) } : {}),
           };
           if (v.isNew) {
             if (!can('variant.create')) continue;
-            const blank = !v.label.trim() && !v.sku.trim() && !v.barcode.trim() && v.cost === '' && v.price === '';
+            const blank = !v.label.trim() && !v.sku.trim() && !v.barcode.trim() && v.cost === '' && v.price === '' && editQtyNum(v) === 0;
             if (blank) continue;
-            await api.post('/api/variants', { productId: editing.id, ...payload });
+            await api.post('/api/variants', {
+              productId: editing.id,
+              ...payload,
+              ...(editQtyNum(v) > 0 ? { quantity: editQtyNum(v), locationId: v.locationId } : {}),
+            });
           } else {
             if (!can('variant.update')) continue;
             await api.patch(`/api/variants/${v.id}`, payload);
@@ -409,6 +456,7 @@ export default function ProductsPage() {
 
       toast.push('success', 'Product updated.');
       setEditing(null);
+      setEditReason('');
       await load();
     } catch (err) {
       toast.push('error', errorMessage(err));
@@ -435,6 +483,10 @@ export default function ProductsPage() {
           lowStock: '10',
           isActive: true,
           isNew: true,
+          qty: '',
+          locationId: locations[0]?.id ?? '',
+          onHand: 0,
+          origCost: null,
         },
       ];
       // Turning a plain product into a variant product: the default 'Standard'
@@ -548,6 +600,17 @@ export default function ProductsPage() {
   // own price, so the product fields are hidden.
   const activeEditVariants = editVariants.filter((v) => v.isActive || v.isNew);
   const showProductPrices = !!editing && isSimpleProductDisplay(editing) && activeEditVariants.length === 1;
+
+  // Smart stock edits (spec 16): quantity/cost changes move stock or revalue
+  // its cost basis, so they need a reason and the stock.adjust permission.
+  const editQtyNum = (v: VariantEdit) => (v.qty.trim() === '' ? 0 : Number(v.qty));
+  const editQtyChanged = (v: VariantEdit) => (v.isNew ? editQtyNum(v) > 0 : editQtyNum(v) !== 0);
+  const editCostChanged = (v: VariantEdit) =>
+    !v.isNew && (v.cost.trim() === '' ? null : Number(v.cost)) !== v.origCost;
+  const hasStockChanges =
+    (showProductPrices && Number(editForm.costPrice) !== origProductCost.current) ||
+    editVariants.some((v) => editCostChanged(v) || editQtyChanged(v));
+  const reasonRequired = hasStockChanges && !editReason.trim();
 
   // A variant product sells and values each variant on its own, so a selling
   // price or cost of 0 (or blank) would sell or value stock at 0. Require both to
@@ -1069,6 +1132,21 @@ export default function ProductsPage() {
                 </Field>
               </>
             )}
+            {hasStockChanges && (
+              <Field
+                label="Reason for stock change"
+                hint="Required — this is recorded on the stock ledger."
+                className="sm:col-span-2"
+              >
+                <input
+                  className="input"
+                  value={editReason}
+                  placeholder="e.g. Cost correction"
+                  onChange={(e) => setEditReason(e.target.value)}
+                />
+                {reasonRequired && <p className="mt-1 text-xs text-red-500">A reason is required.</p>}
+              </Field>
+            )}
             <Field label="Option names" hint="Comma separated, e.g. Size,Color" className="sm:col-span-2">
               <input
                 className="input"
@@ -1168,6 +1246,48 @@ export default function ProductsPage() {
                           onChange={(e) => setVariant(v.id, { lowStock: e.target.value })} />
                       </Field>
                     </div>
+                    {editQtyChanged(v) && (
+                      <p className="text-xs text-amber-600 dark:text-amber-400">
+                        {v.isNew
+                          ? `Will open with ${editQtyNum(v)} unit(s)`
+                          : `Will change stock by ${editQtyNum(v) > 0 ? '+' : ''}${editQtyNum(v)} (${v.onHand} on hand)`}
+                      </p>
+                    )}
+                    {can('stock.adjust') && (
+                      <div className="grid grid-cols-2 gap-2">
+                        <Field
+                          label={v.isNew ? 'Opening quantity' : 'Quantity change'}
+                          hint={!v.isNew ? `${v.onHand} on hand` : undefined}
+                        >
+                          <input
+                            className="input"
+                            type="number"
+                            value={v.qty}
+                            placeholder={v.isNew ? '0' : '+/-'}
+                            onChange={(e) => setVariant(v.id, { qty: e.target.value })}
+                          />
+                        </Field>
+                        {(v.isNew ? editQtyNum(v) > 0 : editQtyNum(v) !== 0) && (
+                          <Field label="Location">
+                            <select
+                              className="input"
+                              value={v.locationId}
+                              onChange={(e) => setVariant(v.id, { locationId: e.target.value })}
+                            >
+                              <option value="">— select —</option>
+                              {locations.map((location) => (
+                                <option key={location.id} value={location.id}>
+                                  {location.name}
+                                </option>
+                              ))}
+                            </select>
+                            {!v.locationId && (
+                              <p className="mt-1 text-xs text-red-500">Location required.</p>
+                            )}
+                          </Field>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

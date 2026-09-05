@@ -106,6 +106,8 @@ export function MovementBadge({ type }: { type: string }) {
     reservation_release: 'amber',
     adjustment: 'amber',
     opening_stock: 'green',
+    revaluation: 'violet',
+    product_edit: 'blue',
   };
   const labels: Record<string, string> = {
     purchase_in: 'Purchase In',
@@ -118,6 +120,8 @@ export function MovementBadge({ type }: { type: string }) {
     reservation_release: 'Release',
     adjustment: 'Adjustment',
     opening_stock: 'Opening Stock',
+    revaluation: 'Revaluation',
+    product_edit: 'Product Edit',
   };
   return <Badge tone={tones[type] ?? 'neutral'}>{labels[type] ?? type}</Badge>;
 }

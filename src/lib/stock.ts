@@ -40,7 +40,7 @@ export async function recordMovement(
   tx: Prisma.TransactionClient,
   input: MovementInput,
 ): Promise<void> {
-  if (!Number.isFinite(input.quantity) || input.quantity === 0) {
+  if (!Number.isFinite(input.quantity) || (input.quantity === 0 && input.type !== 'revaluation')) {
     throw new Error('Movement quantity must be a non-zero number.');
   }
   const effectiveDate = input.effectiveDate ?? new Date();

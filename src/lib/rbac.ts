@@ -229,6 +229,21 @@ export async function canDb(roleId: string, action: Action): Promise<boolean> {
   return perms.has(action);
 }
 
+/**
+ * Assert an additional action on an already-authenticated context. Used when one
+ * endpoint performs two roles' worth of work (e.g. editing a variant also edits
+ * stock). Throws an AuthError (403) when the role lacks the action.
+ */
+export async function assertAction(ctx: GuardContext, action: Action): Promise<void> {
+  const permitted = ctx.roleId ? await canDb(ctx.roleId, action) : can(ctx.role as Role, action);
+  if (!permitted) {
+    throw new AuthError(
+      `Forbidden: role ${ctx.role} is not permitted to perform "${action}".`,
+      403,
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Location scoping
 // ---------------------------------------------------------------------------
