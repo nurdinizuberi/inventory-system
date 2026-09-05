@@ -151,14 +151,25 @@ export default function ProductsPage() {
   }, [view, load]);
 
   const optionNames = form.optionNames.split(',').map((s) => s.trim()).filter(Boolean);
-  const isSimpleProduct = variantDrafts.length === 0;
+  // A product counts as "simple" only while no variant row actually carries a
+  // label. For plain products the selling/cost price fields belong to the
+  // product; once a real variant exists every variant owns its own price/cost
+  // and the product-level fields are hidden.
+  const isSimpleProduct = !variantDrafts.some((d) => d.label.trim() !== '');
 
   // ---- Form validation --------------------------------------------------
   const validate = (): Record<string, string> => {
     const errors: Record<string, string> = {};
     if (!form.name.trim()) errors.name = 'Product name is required.';
-    if (Number(form.basePrice) < 0) errors.basePrice = 'Price cannot be negative.';
-    if (Number(form.costPrice) < 0) errors.costPrice = 'Cost cannot be negative.';
+    // A plain product has no variants to carry its price/cost, so its own selling
+    // price and cost must be explicit and above 0 — a blank, zero or negative
+    // value would silently sell or value stock at 0.
+    if (isSimpleProduct && !(Number(form.basePrice) > 0)) {
+      errors.basePrice = 'Selling price must be greater than 0.';
+    }
+    if (isSimpleProduct && !(Number(form.costPrice) > 0)) {
+      errors.costPrice = 'Cost must be greater than 0.';
+    }
     const oq = Number(form.openingQuantity);
     if (isSimpleProduct && oq < 0) {
       errors.openingQuantity = 'Quantity cannot be negative.';
@@ -170,6 +181,14 @@ export default function ProductsPage() {
       const v = variantDrafts[i];
       if (v.label.trim() === '' && v.quantity > 0) {
         errors[`variant_${i}_label`] = 'Label required when setting quantity.';
+      }
+      // Every real variant is sold and valued on its own — its selling price and
+      // cost must be explicit and above 0 so nothing is ever sold or valued at 0.
+      if (v.label.trim() !== '' && !(Number(v.price) > 0)) {
+        errors[`variant_${i}_price`] = 'Selling price must be greater than 0.';
+      }
+      if (v.label.trim() !== '' && !(Number(v.cost) > 0)) {
+        errors[`variant_${i}_cost`] = 'Cost must be greater than 0.';
       }
       if (v.quantity > 0 && !v.locationId) {
         errors[`variant_${i}_location`] = 'Choose a location for this variant.';
@@ -207,8 +226,11 @@ export default function ProductsPage() {
 
       await api.post('/api/products', {
         ...form,
-        basePrice: Number(form.basePrice || 0),
-        costPrice: Number(form.costPrice || 0),
+        // Only a plain product keeps its price on the product row. Once real
+        // variants exist the product-level fields are hidden and each variant
+        // owns its price, so nothing is stored at the product level.
+        basePrice: isSimpleProduct ? Number(form.basePrice || 0) : 0,
+        costPrice: isSimpleProduct ? Number(form.costPrice || 0) : 0,
         categoryId: form.categoryId || null,
         optionNames,
         variants,
@@ -270,28 +292,43 @@ export default function ProductsPage() {
 
   const openEdit = (product: Product) => {
     setEditing(product);
+    const active = product.variants.filter((v) => v.isActive);
+    const isSimple = active.length === 1 && active[0].isDefault && active[0].label === 'Standard';
+    const defaultVariant = isSimple ? active[0] : undefined;
+
     setEditForm({
       name: product.name,
       description: product.description ?? '',
-      basePrice: product.basePrice ? String(product.basePrice) : '',
-      costPrice: product.costPrice ? String(product.costPrice) : '',
+      // A plain product keeps a single source of truth on the product row — fold
+      // any legacy per-variant price back onto the product so its price is not
+      // editable in two places. Its own values are shown verbatim (including 0)
+      // so a stored price is never presented as blank.
+      basePrice: defaultVariant ? String(defaultVariant.sellingPrice ?? product.basePrice) : product.basePrice ? String(product.basePrice) : '',
+      costPrice: defaultVariant ? String(defaultVariant.costPrice ?? product.costPrice) : product.costPrice ? String(product.costPrice) : '',
       categoryId: product.category?.id ?? '',
       optionNames: product.optionNames ?? '',
       openingQuantity: '',
       openingLocationId: '',
     });
     setEditVariants(
-      product.variants.map((v) => ({
-        id: v.id,
-        label: v.label,
-        sku: v.sku,
-        barcode: v.barcode,
-        cost: v.costPrice != null ? String(v.costPrice) : '',
-        price: v.sellingPrice != null ? String(v.sellingPrice) : '',
-        lowStock: String(v.lowStockThreshold),
-        isActive: v.isActive,
-        isNew: false,
-      })),
+      product.variants.map((v) => {
+        const pricedOnProduct = isSimple && v.id === defaultVariant?.id;
+        return {
+          id: v.id,
+          label: v.label,
+          sku: v.sku,
+          barcode: v.barcode,
+          // Real variant products: prefill every row with its effective price (its
+          // own, else the product default) so no variant silently inherits a hidden
+          // product-level price. The default variant of a plain product keeps its
+          // own price fields empty (null) — its price lives on the product row.
+          cost: pricedOnProduct ? '' : v.costPrice != null ? String(v.costPrice) : product.costPrice ? String(product.costPrice) : '',
+          price: pricedOnProduct ? '' : v.sellingPrice != null ? String(v.sellingPrice) : product.basePrice ? String(product.basePrice) : '',
+          lowStock: String(v.lowStockThreshold),
+          isActive: v.isActive,
+          isNew: false,
+        };
+      }),
     );
   };
 
@@ -301,24 +338,41 @@ export default function ProductsPage() {
       toast.push('error', 'Product name is required.');
       return;
     }
-    if (Number(editForm.basePrice) < 0 || Number(editForm.costPrice) < 0) {
+    // Product-level prices are written only when they are actually used: plain
+    // products, or variant products the current user cannot reprice through the
+    // variant rows. Once real variants are priced, product-level defaults are
+    // cleared so a price is never stored in two places.
+    const writeProductPrices = showProductPrices || !variantsEditable;
+    if (writeProductPrices && (Number(editForm.basePrice) < 0 || Number(editForm.costPrice) < 0)) {
       toast.push('error', 'Prices cannot be negative.');
+      return;
+    }
+    // Plain products carry their price/cost on the product row, so a selling
+    // price or cost of 0 would sell or value stock at 0.
+    if (showProductPrices && (!(Number(editForm.basePrice) > 0) || !(Number(editForm.costPrice) > 0))) {
+      toast.push('error', 'A plain product needs a selling price and cost greater than 0.');
+      return;
+    }
+    if (editVariants.some((v) => invalidVariantPrice(v) || invalidVariantCost(v))) {
+      toast.push('error', 'Every variant needs a selling price and cost greater than 0.');
       return;
     }
     setBusy(true);
     try {
       const newOptionNames = editForm.optionNames.split(',').map((s) => s.trim()).filter(Boolean);
 
-      await api.patch(`/api/products/${editing.id}`, {
-        name: editForm.name,
-        description: editForm.description || null,
-        basePrice: Number(editForm.basePrice || 0),
-        costPrice: Number(editForm.costPrice || 0),
-        categoryId: editForm.categoryId || null,
-        optionNames: newOptionNames,
-      });
+      const updateProduct = () =>
+        api.patch(`/api/products/${editing.id}`, {
+          name: editForm.name,
+          description: editForm.description || null,
+          basePrice: writeProductPrices ? Number(editForm.basePrice || 0) : 0,
+          costPrice: writeProductPrices ? Number(editForm.costPrice || 0) : 0,
+          categoryId: editForm.categoryId || null,
+          optionNames: newOptionNames,
+        });
 
-      if (can('variant.update') || can('variant.create')) {
+      const updateVariants = async () => {
+        if (!variantsEditable) return;
         for (const v of editVariants) {
           const payload = {
             label: v.label,
@@ -338,6 +392,19 @@ export default function ProductsPage() {
             await api.patch(`/api/variants/${v.id}`, payload);
           }
         }
+      };
+
+      // Order matters because of how the server validates price changes:
+      // - Plain products are priced on the product row, so update those defaults
+      //   first and let the default variant keep inheriting them.
+      // - Variant products own their price on each variant, so price the variants
+      //   first, then clear the (now unused) product-level defaults.
+      if (showProductPrices) {
+        await updateProduct();
+        await updateVariants();
+      } else {
+        await updateVariants();
+        await updateProduct();
       }
 
       toast.push('success', 'Product updated.');
@@ -355,20 +422,37 @@ export default function ProductsPage() {
   };
 
   const addEditVariant = () => {
-    setEditVariants((prev) => [
-      ...prev,
-      {
-        id: `new-${Date.now()}`,
-        label: '',
-        sku: '',
-        barcode: '',
-        cost: '',
-        price: '',
-        lowStock: '10',
-        isActive: true,
-        isNew: true,
-      },
-    ]);
+    setEditVariants((prev) => {
+      const next = [
+        ...prev,
+        {
+          id: `new-${Date.now()}`,
+          label: '',
+          sku: '',
+          barcode: '',
+          cost: '',
+          price: '',
+          lowStock: '10',
+          isActive: true,
+          isNew: true,
+        },
+      ];
+      // Turning a plain product into a variant product: the default 'Standard'
+      // variant inherits the product-level price/cost, because those product
+      // fields are hidden and cleared as soon as real variants exist.
+      if (editing && isSimpleProductDisplay(editing) && !prev.some((v) => v.isNew)) {
+        const standard = prev.find((v) => v.isActive && !v.isNew);
+        if (standard) {
+          const index = prev.indexOf(standard);
+          next[index] = {
+            ...standard,
+            cost: standard.cost || editForm.costPrice,
+            price: standard.price || editForm.basePrice,
+          };
+        }
+      }
+      return next;
+    });
   };
 
   const removeEditVariant = (id: string) => {
@@ -458,6 +542,43 @@ export default function ProductsPage() {
     return active.length === 1 && active[0].isDefault && active[0].label === 'Standard';
   };
 
+  // The product-level price/cost fields only apply while the product being edited
+  // is still a plain product (its single default 'Standard' variant) and no extra
+  // variant row has been added. Once real variants exist each variant carries its
+  // own price, so the product fields are hidden.
+  const activeEditVariants = editVariants.filter((v) => v.isActive || v.isNew);
+  const showProductPrices = !!editing && isSimpleProductDisplay(editing) && activeEditVariants.length === 1;
+
+  // A variant product sells and values each variant on its own, so a selling
+  // price or cost of 0 (or blank) would sell or value stock at 0. Require both to
+  // be greater than 0 on every variant that will be sold — except while the
+  // product is still plain (its price/cost live on the product) or when the
+  // current user cannot edit variant pricing at all.
+  const variantsEditable = can('variant.update') || can('variant.create');
+  const variantPricedOnRow = (v: VariantEdit) => {
+    if (!variantsEditable || showProductPrices) return false;
+    if (!v.isNew && !v.isActive) return false; // archived variants aren't sold
+    if (v.isNew) {
+      // New rows that are left completely blank are never created — they are
+      // fine without a price or cost.
+      const blankRow = !v.label.trim() && !v.sku.trim() && !v.barcode.trim() && v.cost === '' && v.price === '';
+      if (blankRow) return false;
+    }
+    return true;
+  };
+  const invalidVariantPrice = (v: VariantEdit) => variantPricedOnRow(v) && !(Number(v.price) > 0);
+  const invalidVariantCost = (v: VariantEdit) => variantPricedOnRow(v) && !(Number(v.cost) > 0);
+
+  // Price shown in the table: the single effective price for a plain product, or
+  // a min–max range across active variants once there are real variants.
+  const priceSummary = (p: Product) => {
+    const prices = p.variants.filter((v) => v.isActive).map((v) => v.sellingPrice ?? p.basePrice);
+    if (prices.length === 0) return currency(p.basePrice);
+    const min = Math.min(...prices);
+    const max = Math.max(...prices);
+    return min === max ? currency(min) : `${currency(min)} – ${currency(max)}`;
+  };
+
   return (
     <Shell>
       <PageHeader
@@ -520,7 +641,7 @@ export default function ProductsPage() {
                 <tr>
                   <th>Product</th>
                   <th>Category</th>
-                  <th className="text-right">Base price</th>
+                  <th className="text-right">Price</th>
                   <th className="text-right">{view === 'active' ? 'Quantity' : 'Variants'}</th>
                   <th />
                 </tr>
@@ -543,7 +664,7 @@ export default function ProductsPage() {
                           {product.description && <p className="text-xs text-ink-500 dark:text-ink-400">{product.description}</p>}
                         </td>
                         <td className="text-ink-600 dark:text-ink-300">{product.category?.name ?? '—'}</td>
-                        <td className="text-right tabular-nums">{currency(product.basePrice)}</td>
+                        <td className="text-right tabular-nums">{priceSummary(product)}</td>
                         <td className="text-right tabular-nums">
                           {simple ? (
                             <Badge tone={product.totalOnHand && product.totalOnHand > 0 ? 'green' : 'neutral'}>
@@ -725,28 +846,32 @@ export default function ProductsPage() {
                 </div>
               )}
             </Field>
-            <Field label="Default selling price">
-              <input
-                className="input"
-                inputMode="decimal"
-                type="number"
-                value={form.basePrice}
-                placeholder="0"
-                onChange={(e) => setForm({ ...form, basePrice: e.target.value })}
-              />
-              {formErrors.basePrice && <p className="mt-1 text-xs text-red-500">{formErrors.basePrice}</p>}
-            </Field>
-            <Field label="Default cost price">
-              <input
-                className="input"
-                inputMode="decimal"
-                type="number"
-                value={form.costPrice}
-                placeholder="0"
-                onChange={(e) => setForm({ ...form, costPrice: e.target.value })}
-              />
-              {formErrors.costPrice && <p className="mt-1 text-xs text-red-500">{formErrors.costPrice}</p>}
-            </Field>
+            {isSimpleProduct && (
+              <>
+                <Field label="Default selling price">
+                  <input
+                    className="input"
+                    inputMode="decimal"
+                    type="number"
+                    value={form.basePrice}
+                    placeholder="0"
+                    onChange={(e) => setForm({ ...form, basePrice: e.target.value })}
+                  />
+                  {formErrors.basePrice && <p className="mt-1 text-xs text-red-500">{formErrors.basePrice}</p>}
+                </Field>
+                <Field label="Default cost price">
+                  <input
+                    className="input"
+                    inputMode="decimal"
+                    type="number"
+                    value={form.costPrice}
+                    placeholder="0"
+                    onChange={(e) => setForm({ ...form, costPrice: e.target.value })}
+                  />
+                  {formErrors.costPrice && <p className="mt-1 text-xs text-red-500">{formErrors.costPrice}</p>}
+                </Field>
+              </>
+            )}
             <Field label="Option names" hint="Comma separated, e.g. Size,Color" className="sm:col-span-2">
               <input
                 className="input"
@@ -807,7 +932,16 @@ export default function ProductsPage() {
               <span className="label mb-0">Variants</span>
               <button
                 className="btn-secondary btn-sm"
-                onClick={() => setVariantDrafts([...variantDrafts, { ...EMPTY_VARIANT }])}
+                onClick={() =>
+                  setVariantDrafts((prev) => [
+                    ...prev,
+                    // Pre-fill each new row from the product-level defaults (they
+                    // are hidden once variants exist) so a shared price/cost only
+                    // has to be typed once — each row can still be adjusted
+                    // individually.
+                    { ...EMPTY_VARIANT, cost: form.costPrice, price: form.basePrice },
+                  ])
+                }
                 type="button"
               >
                 Add variant
@@ -817,6 +951,12 @@ export default function ProductsPage() {
               Leave the list empty and a default variant is created automatically — SKUs and EAN-13 barcodes are
               generated for you. Enter a variant label as “{optionNames.join(' / ') || 'Standard'}”.
             </p>
+            {!isSimpleProduct && (
+              <p className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
+                Selling price and cost are now set on each variant row. New rows are pre-filled from the defaults you
+                entered, and the product-level price/cost fields are hidden because they no longer apply.
+              </p>
+            )}
             <div className="space-y-2">
               {variantDrafts.map((draft, index) => (
                 <div key={index} className="grid grid-cols-[1fr_5rem_5rem_5rem_5rem_auto] gap-2">
@@ -836,6 +976,12 @@ export default function ProductsPage() {
                     onClick={() => setVariantDrafts(variantDrafts.filter((_, i) => i !== index))} type="button">✕</button>
                   {formErrors[`variant_${index}_label`] && (
                     <p className="col-span-6 text-xs text-red-500">{formErrors[`variant_${index}_label`]}</p>
+                  )}
+                  {formErrors[`variant_${index}_price`] && (
+                    <p className="col-span-6 text-xs text-red-500">{formErrors[`variant_${index}_price`]}</p>
+                  )}
+                  {formErrors[`variant_${index}_cost`] && (
+                    <p className="col-span-6 text-xs text-red-500">{formErrors[`variant_${index}_cost`]}</p>
                   )}
                   {draft.quantity > 0 && (
                     <div className="col-span-6 flex gap-2">
@@ -898,26 +1044,36 @@ export default function ProductsPage() {
                 ))}
               </select>
             </Field>
-            <Field label="Default selling price">
-              <input
-                className="input"
-                inputMode="decimal"
-                type="number"
-                value={editForm.basePrice}
-                placeholder="0"
-                onChange={(e) => setEditForm({ ...editForm, basePrice: e.target.value })}
-              />
-            </Field>
-            <Field label="Default cost price">
-              <input
-                className="input"
-                inputMode="decimal"
-                type="number"
-                value={editForm.costPrice}
-                placeholder="0"
-                onChange={(e) => setEditForm({ ...editForm, costPrice: e.target.value })}
-              />
-            </Field>
+            {showProductPrices && (
+              <>
+                <Field label="Default selling price">
+                  <input
+                    className="input"
+                    inputMode="decimal"
+                    type="number"
+                    value={editForm.basePrice}
+                    placeholder="0"
+                    onChange={(e) => setEditForm({ ...editForm, basePrice: e.target.value })}
+                  />
+                  {!(Number(editForm.basePrice) > 0) && (
+                    <p className="mt-1 text-xs text-red-500">Selling price must be greater than 0.</p>
+                  )}
+                </Field>
+                <Field label="Default cost price">
+                  <input
+                    className="input"
+                    inputMode="decimal"
+                    type="number"
+                    value={editForm.costPrice}
+                    placeholder="0"
+                    onChange={(e) => setEditForm({ ...editForm, costPrice: e.target.value })}
+                  />
+                  {!(Number(editForm.costPrice) > 0) && (
+                    <p className="mt-1 text-xs text-red-500">Cost must be greater than 0.</p>
+                  )}
+                </Field>
+              </>
+            )}
             <Field label="Option names" hint="Comma separated, e.g. Size,Color" className="sm:col-span-2">
               <input
                 className="input"
@@ -978,13 +1134,39 @@ export default function ProductsPage() {
                       </Field>
                     </div>
                     <div className="grid grid-cols-3 gap-2">
-                      <Field label="Cost">
-                        <input className="input" type="number" inputMode="decimal" value={v.cost} placeholder="0"
-                          onChange={(e) => setVariant(v.id, { cost: e.target.value })} />
+                      <Field
+                        label="Cost"
+                        hint={showProductPrices && v.isActive && !v.isNew ? 'Set on the product' : undefined}
+                      >
+                        <input
+                          className="input"
+                          type="number"
+                          inputMode="decimal"
+                          value={showProductPrices && v.isActive && !v.isNew ? editForm.costPrice : v.cost}
+                          placeholder="0"
+                          disabled={showProductPrices && v.isActive && !v.isNew}
+                          onChange={(e) => setVariant(v.id, { cost: e.target.value })}
+                        />
+                        {invalidVariantCost(v) && (
+                          <p className="mt-1 text-xs text-red-500">Cost must be greater than 0.</p>
+                        )}
                       </Field>
-                      <Field label="Price">
-                        <input className="input" type="number" inputMode="decimal" value={v.price} placeholder="0"
-                          onChange={(e) => setVariant(v.id, { price: e.target.value })} />
+                      <Field
+                        label="Price"
+                        hint={showProductPrices && v.isActive && !v.isNew ? 'Set on the product' : undefined}
+                      >
+                        <input
+                          className="input"
+                          type="number"
+                          inputMode="decimal"
+                          value={showProductPrices && v.isActive && !v.isNew ? editForm.basePrice : v.price}
+                          placeholder="0"
+                          disabled={showProductPrices && v.isActive && !v.isNew}
+                          onChange={(e) => setVariant(v.id, { price: e.target.value })}
+                        />
+                        {invalidVariantPrice(v) && (
+                          <p className="mt-1 text-xs text-red-500">Selling price must be greater than 0.</p>
+                        )}
                       </Field>
                       <Field label="Low at">
                         <input className="input" type="number" min={0} value={v.lowStock} placeholder="0"

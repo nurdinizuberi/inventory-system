@@ -45,10 +45,34 @@ export async function PATCH(request: Request, { params }: Params) {
     const parsed = updateSchema.safeParse(await request.json());
     if (!parsed.success) return badRequest(parsed.error.issues.map((i) => i.message).join(', '));
 
-    const before = await prisma.product.findFirst({ where: { id, ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}) } });
+    const before = await prisma.product.findFirst({
+      where: { id, ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}) },
+      include: { variants: { where: { isActive: true } } },
+    });
     if (!before) return NextResponse.json({ error: 'Product not found' }, { status: 404 });
 
     const payload = parsed.data;
+    // Changing the product-level defaults can silently zero out any active variant
+    // that inherits them, so when a default actually changes, make sure every
+    // sellable variant still ends up with a selling price and cost greater than 0
+    // (its own, or via the product default). Untouched defaults (metadata-only
+    // edits) don't need re-validation.
+    if (
+      (payload.basePrice !== undefined && payload.basePrice !== before.basePrice) ||
+      (payload.costPrice !== undefined && payload.costPrice !== before.costPrice)
+    ) {
+      const basePrice = payload.basePrice !== undefined ? payload.basePrice : before.basePrice;
+      const costPrice = payload.costPrice !== undefined ? payload.costPrice : before.costPrice;
+      for (const v of before.variants) {
+        if (!((v.sellingPrice ?? basePrice) > 0)) {
+          return badRequest(`"${v.label}" needs a selling price greater than 0 — it currently inherits a 0 product default.`);
+        }
+        if (!((v.costPrice ?? costPrice) > 0)) {
+          return badRequest(`"${v.label}" needs a cost greater than 0 — it currently inherits a 0 product default.`);
+        }
+      }
+    }
+
     const product = await prisma.product.update({
       where: { id },
       data: {

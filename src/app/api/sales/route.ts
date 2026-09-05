@@ -94,6 +94,26 @@ export async function POST(request: Request) {
     const missing = data.lines.filter((l) => !variants.some((v) => v.id === l.variantId));
     if (missing.length) return badRequest(`Unknown variant id(s): ${missing.map((m) => m.variantId).join(', ')}`);
 
+    // Catalog prices are guaranteed to be > 0, but a ticket must still charge more
+    // than 0 per unit after any discount or manual price override — items can
+    // never go out the door for free.
+    const freeSales = data.lines.flatMap((line) => {
+      const variant = variants.find((v) => v.id === line.variantId)!;
+      const unitPrice = variant.sellingPrice ?? variant.product.basePrice;
+      const actualPrice =
+        line.actualPrice != null ? line.actualPrice : round2(Math.max(0, unitPrice - line.unitDiscount));
+      if (!(unitPrice > 0)) return [`${variant.product.name} — ${variant.label} has no list selling price`];
+      if (!(actualPrice > 0)) {
+        return [
+          `${variant.product.name} — ${variant.label} would sell for 0 (list ${unitPrice.toLocaleString()}, discount ${line.unitDiscount.toLocaleString()}) — lower the discount or set a manual price above 0`,
+        ];
+      }
+      return [];
+    });
+    if (freeSales.length) {
+      return badRequest(`Cannot complete sale — ${freeSales.join('; ')}.`);
+    }
+
     // Pre-flight stock check so the cashier gets a clean error, not a
     // half-written transaction.
     const stock = await getStockMatrix(prisma, {

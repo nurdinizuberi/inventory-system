@@ -30,7 +30,39 @@ const createSchema = z.object({
       }),
     )
     .default([]),
-});
+})
+  .superRefine((data, ctx) => {
+    if (data.variants.length === 0) {
+      // No explicit variants — the product gets an automatic default 'Standard'
+      // variant that inherits the product price/cost. Those defaults are what the
+      // variant sells and values at, so they must be greater than 0.
+      if (!(data.basePrice > 0)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['basePrice'], message: 'Selling price must be greater than 0.' });
+      }
+      if (!(data.costPrice > 0)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['costPrice'], message: 'Cost must be greater than 0.' });
+      }
+    } else {
+      // Real variants own their price/cost (the product level is 0 for these), so
+      // each variant must carry both explicitly — a blank one would sell/value at 0.
+      data.variants.forEach((v, i) => {
+        if (v.sellingPrice == null || !(v.sellingPrice > 0)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['variants', i, 'sellingPrice'],
+            message: `Variant ${i + 1} selling price must be greater than 0.`,
+          });
+        }
+        if (v.costPrice == null || !(v.costPrice > 0)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['variants', i, 'costPrice'],
+            message: `Variant ${i + 1} cost must be greater than 0.`,
+          });
+        }
+      });
+    }
+  });
 
 export async function GET(request: Request) {
   try {
@@ -150,7 +182,12 @@ export async function POST(request: Request) {
     // batch + ledger entry so the product shows quantity immediately. This
     // keeps the ledger as the single source of truth while allowing a starting
     // quantity directly on the product form.
-    const openingStockEntries: { variantId: string; quantity: number; locationId: string }[] = [];
+    const openingStockEntries: {
+      variantId: string;
+      quantity: number;
+      locationId: string;
+      unitCost: number;
+    }[] = [];
     if (data.openingQuantity && data.openingQuantity > 0 && data.openingLocationId) {
       // Product with no explicit variants — opening qty goes on the default variant.
       if (data.variants.length === 0) {
@@ -158,6 +195,7 @@ export async function POST(request: Request) {
           variantId: product.variants[0].id,
           quantity: data.openingQuantity,
           locationId: data.openingLocationId,
+          unitCost: data.costPrice,
         });
       }
     }
@@ -174,7 +212,14 @@ export async function POST(request: Request) {
           (v) => v.label === label || (data.variants.length === 0 && v.isDefault),
         );
         if (created) {
-          openingStockEntries.push({ variantId: created.id, quantity: qty, locationId: loc });
+          openingStockEntries.push({
+            variantId: created.id,
+            quantity: qty,
+            locationId: loc,
+            // Each variant's opening batch carries that variant's own cost so the
+            // ledger is valued correctly — variant products store 0 at product level.
+            unitCost: (vi as { costPrice?: number | null }).costPrice ?? data.costPrice,
+          });
         }
       }
     }
@@ -189,7 +234,7 @@ export async function POST(request: Request) {
                 code: `OS-${product.id.slice(-8)}-${entry.variantId.slice(-4)}`,
                 variantId: entry.variantId,
                 locationId: entry.locationId,
-                unitCost: data.costPrice,
+                unitCost: entry.unitCost,
                 quantity: entry.quantity,
                 remainingQty: entry.quantity,
                 receivedAt: new Date(),
@@ -203,8 +248,8 @@ export async function POST(request: Request) {
               quantity: entry.quantity,
               batchId: batch.id,
               status: 'available',
-              unitCost: data.costPrice,
-              totalCost: data.costPrice * entry.quantity,
+              unitCost: entry.unitCost,
+              totalCost: entry.unitCost * entry.quantity,
               referenceType: 'Product',
               referenceId: product.id,
               referenceLabel: product.name,

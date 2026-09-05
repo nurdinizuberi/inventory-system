@@ -176,8 +176,19 @@ export default function PosPage() {
 const paid = Number(amountPaid || 0);
   const change = useMemo(() => Math.max(0, paid - total), [paid, total]);
 
+  // A line may never sell for 0 — a full per-unit discount (or a 0 override)
+  // would give the item away. While any line is free the ticket cannot be charged.
+  const freeLineCount = useMemo(
+    () => cart.filter((line) => line.variant.sellingPrice - line.unitDiscount <= 0).length,
+    [cart],
+  );
+
   const submit = async (backdateReason?: BackdateReason | null) => {
     if (!cart.length) return;
+    if (freeLineCount > 0) {
+      toast.push('error', 'Every item must sell for more than 0 — adjust the discounts.');
+      return;
+    }
     setBusy(true);
     try {
       const result = await api.post<{ sale: Receipt }>('/api/sales', {
@@ -345,6 +356,9 @@ const paid = Number(amountPaid || 0);
                       {currency((line.variant.sellingPrice - line.unitDiscount) * line.quantity)}
                     </span>
                   </div>
+                  {line.variant.sellingPrice - line.unitDiscount <= 0 && (
+                    <p className="mt-1 text-xs text-red-500">Price after discount must be greater than 0.</p>
+                  )}
                 </li>
               ))}
             </ul>
@@ -363,9 +377,15 @@ const paid = Number(amountPaid || 0);
               <span>Total</span>
               <span className="tabular-nums">{currency(total)}</span>
             </div>
+            {freeLineCount > 0 && (
+              <p className="text-xs text-red-500">
+                {freeLineCount} line{freeLineCount === 1 ? '' : 's'} {freeLineCount === 1 ? 'is' : 'are'} priced at 0 — lower the
+                discount before charging.
+              </p>
+            )}
             <button
               className="btn-primary w-full"
-              disabled={!cart.length}
+              disabled={!cart.length || freeLineCount > 0}
               onClick={() => {
                 setAmountPaid(String(total));
                 setCheckoutOpen(true);

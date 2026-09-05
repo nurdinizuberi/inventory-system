@@ -175,6 +175,16 @@ export async function sellReservation(
       ]);
       if (!variant || !location) throw new Error('Reservation references a missing variant or location');
 
+      // Fulfilling a hold rings a sale at the list price — never at 0. The route
+      // checks this first, but guard here too so the ledger is never touched for
+      // an unpriced item regardless of the caller.
+      const unitPrice = variant.sellingPrice ?? variant.product.basePrice;
+      if (!(unitPrice > 0)) {
+        throw new Error(
+          `${variant.product.name} — ${variant.label} has no selling price — set one before fulfilling the reservation.`,
+        );
+      }
+
       const held = await tx.stockMovement.findMany({
         where: { reservationId, status: 'reserved', type: 'reservation' },
       });
@@ -231,7 +241,6 @@ export async function sellReservation(
         },
       });
 
-      const unitPrice = variant.sellingPrice ?? variant.product.basePrice;
       const fifo = await consumeFifo(tx, {
         type: 'sale_out',
         variantId: reservation.variantId,

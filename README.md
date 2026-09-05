@@ -51,7 +51,7 @@ see [Multi-tenancy](#multi-tenancy) below.
 npm run typecheck       # tsc --noEmit
 npm run build           # prisma generate + next build (validates every route export)
 npm run verify:ledger   # ledger invariants against the database
-bash scripts/e2e.sh     # 49 end-to-end API assertions (needs a running server on :3004)
+bash scripts/e2e.sh     # 50 end-to-end API assertions (needs a running server on :3004)
 ```
 
 `BASE=http://127.0.0.1:3004` is the default; override it to point the suite at any server.
@@ -68,8 +68,8 @@ bash scripts/e2e.sh     # 49 end-to-end API assertions (needs a running server o
 
 `scripts/e2e.sh` exercises the real HTTP API: authentication, the RBAC matrix, location
 capability flags, purchase receipt, transfer ship/receive, FIFO costing at the till, oversell
-blocking, returns (sellable vs damaged), the adjustment approval gate, all six reports, and the
-audit trail.
+blocking, zero-price sale blocking, returns (sellable vs damaged), the adjustment approval gate,
+all six reports, and the audit trail.
 
 ---
 
@@ -218,15 +218,24 @@ their audit trail is preserved. Archiving never destroys business data.
   If your role lacks `variant.update`, you can still edit the product-level fields.
 - **Stock is displayed, never stored.** The product list shows a **Total on hand** column, and
   expanding a product reveals each variant’s on-hand/sellable/reserved breakdown per location, all
-  derived in real time from the movement ledger.
+  derived in real time from the movement ledger. The **Price** column shows the single effective
+  price for a plain product, or a min–max range across its active variants.
 - **A product is quantity-bearing even without variants.** When you add a product and leave the
   variant list empty, you can enter a **starting quantity** (and a location) directly on the form —
   an opening batch is created so the product is immediately available. When you add variants, each
   variant carries its own starting quantity and the product’s **Total on hand is simply the sum of
   its variants** — the two always conform, with no manual reconciliation.
+- **Nothing sells or values at 0.** Every sellable item must carry a selling price and a cost
+  greater than 0 — on the product row for a plain product, on each variant otherwise (the
+  product-level price fields hide and clear themselves the moment real variants exist). The rule
+  is enforced at every boundary: product and variant create/update reject a 0 price, reservations
+  cannot be taken or fulfilled on an unpriced item, a sale line priced at 0 after discount or
+  manual override is refused by the API, and the POS blocks charging while any line would go out
+  for free. Opening stock batches are valued at each variant’s own cost, not a shared default.
 - **Forms are validated before submit.** Required fields (product name, variant labels, SKUs,
-  barcodes) and value checks (non-negative prices, a location whenever a starting quantity is set)
-  block submission and show inline errors instead of sending bad data to the server.
+  barcodes) and value checks (prices above 0 where they apply, a location whenever a starting
+  quantity is set) block submission and show inline errors instead of sending bad data to the
+  server. The server re-validates every request — the UI checks are convenience, not the gate.
 - **Archiving is reversible.** Archive a product to withdraw it (and its variants) from lists and
   the POS. Switch to the **Archived** tab to see what you removed and **Restore** it at any time —
   its stock, batches and history come straight back undamaged.
@@ -281,7 +290,7 @@ prisma/
   seed.ts              entry point: global admin + demo dataset per tenant
   seed-data.ts         demo dataset (purchases, transfers, sales, returns)
   verify-ledger.ts     ledger invariants
-scripts/e2e.sh         end-to-end API test suite (49 assertions)
+scripts/e2e.sh         end-to-end API test suite (50 assertions)
 src/lib/
   rbac.ts              the permission matrix + guard()
   stock.ts             ledger writes and derived stock

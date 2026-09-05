@@ -146,6 +146,9 @@ OVER=$((STOCK_NOW+50))
 expect_status "oversell is BLOCKED (409)" 409 POST /api/sales \
   "{\"locationId\":\"$MBEZI_ID\",\"lines\":[{\"variantId\":\"$V_ID\",\"quantity\":$OVER}]}" $CASH
 
+expect_status "zero-priced sale is BLOCKED (400)" 400 POST /api/sales \
+  "{\"locationId\":\"$MBEZI_ID\",\"lines\":[{\"variantId\":\"$V_ID\",\"quantity\":1,\"unitDiscount\":999999}]}" $CASH
+
 expect_status "cashier cannot sell at a warehouse (not their location)" 403 POST /api/sales \
   "{\"locationId\":\"$WH_ID\",\"lines\":[{\"variantId\":\"$V_ID\",\"quantity\":1}]}" $CASH
 

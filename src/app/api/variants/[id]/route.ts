@@ -50,10 +50,27 @@ export async function PATCH(request: Request, { params }: Params) {
     const parsed = updateSchema.safeParse(await request.json());
     if (!parsed.success) return badRequest(parsed.error.issues.map((i) => i.message).join(', '));
 
-    const before = await prisma.variant.findFirst({ where: { id, ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}) } });
+    const before = await prisma.variant.findFirst({
+      where: { id, ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}) },
+      include: { product: true },
+    });
     if (!before) return NextResponse.json({ error: 'Variant not found' }, { status: 404 });
 
     const data = parsed.data;
+    // A sellable variant must end up with a selling price and cost greater than 0
+    // (its own, else the product default it inherits). Setting one to 0/null would
+    // otherwise silently sell or value it at 0.
+    if (before.isActive) {
+      const sellingPrice = data.sellingPrice !== undefined ? data.sellingPrice : before.sellingPrice;
+      const costPrice = data.costPrice !== undefined ? data.costPrice : before.costPrice;
+      if (!((sellingPrice ?? before.product.basePrice) > 0)) {
+        return badRequest('Selling price must be greater than 0.');
+      }
+      if (!((costPrice ?? before.product.costPrice) > 0)) {
+        return badRequest('Cost must be greater than 0.');
+      }
+    }
+
     const variant = await prisma.variant.update({
       where: { id },
       data: {

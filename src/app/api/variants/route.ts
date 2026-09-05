@@ -122,6 +122,16 @@ export async function POST(request: Request) {
     });
     if (!product) return badRequest('Product not found');
 
+    // A new variant is sold and valued on its own. It may inherit the product
+    // default only when that default is itself greater than 0 — otherwise a blank
+    // price/cost would silently sell or value the variant at 0.
+    if (!((data.sellingPrice ?? product.basePrice) > 0)) {
+      return badRequest('Selling price must be greater than 0 (set it on the variant or raise the product default).');
+    }
+    if (!((data.costPrice ?? product.costPrice) > 0)) {
+      return badRequest('Cost must be greater than 0 (set it on the variant or raise the product default).');
+    }
+
     const attrPairs = Object.entries(data.attributes).filter(([, value]) => value);
     const label =
       data.label?.trim() ||

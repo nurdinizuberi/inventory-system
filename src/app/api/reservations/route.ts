@@ -55,6 +55,15 @@ export async function POST(request: Request) {
     });
     if (!variant) return badRequest('Variant not found');
 
+    // A hold is taken so the units can be sold at the till, so the item must
+    // actually have a selling price — reserving an unpriced item could otherwise
+    // end up as a free sale when the hold is fulfilled.
+    if (!((variant.sellingPrice ?? variant.product.basePrice) > 0)) {
+      return badRequest(
+        `${variant.product.name} — ${variant.label} has no selling price — set one before reserving it.`,
+      );
+    }
+
     const existing = await prisma.reservation.count({ where: { ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}) } });
     const makeNumber = (attempt: number) => `RSV-${String(existing + 1 + attempt).padStart(4, '0')}`;
     const number = await withRetryNumber(makeNumber, (n) =>
@@ -121,6 +130,21 @@ export async function PATCH(request: Request) {
 
     const reservation = await prisma.reservation.findFirst({ where: { id: parsed.data.reservationId, ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}) } });
     if (!reservation) return NextResponse.json({ error: 'Reservation not found' }, { status: 404 });
+
+    // Fulfilling a hold rings a sale at the item's list price — never allow that
+    // to happen at 0 (e.g. an unpriced item that was held before being priced).
+    if (parsed.data.action === 'fulfil') {
+      const variant = await prisma.variant.findFirst({
+        where: { id: reservation.variantId, ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}) },
+        include: { product: true },
+      });
+      if (!variant) return NextResponse.json({ error: 'Variant not found' }, { status: 404 });
+      if (!((variant.sellingPrice ?? variant.product.basePrice) > 0)) {
+        return badRequest(
+          `${variant.product.name} — ${variant.label} has no selling price — set one before fulfilling the reservation.`,
+        );
+      }
+    }
 
     if (parsed.data.action === 'release') {
       const updated = await endReservation(parsed.data.reservationId, ctx);
