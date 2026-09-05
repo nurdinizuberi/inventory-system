@@ -951,12 +951,6 @@ export default function ProductsPage() {
               Leave the list empty and a default variant is created automatically — SKUs and EAN-13 barcodes are
               generated for you. Enter a variant label as “{optionNames.join(' / ') || 'Standard'}”.
             </p>
-            {!isSimpleProduct && (
-              <p className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
-                Selling price and cost are now set on each variant row. New rows are pre-filled from the defaults you
-                entered, and the product-level price/cost fields are hidden because they no longer apply.
-              </p>
-            )}
             <div className="space-y-2">
               {variantDrafts.map((draft, index) => (
                 <div key={index} className="grid grid-cols-[1fr_5rem_5rem_5rem_5rem_auto] gap-2">
