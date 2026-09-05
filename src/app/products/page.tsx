@@ -947,10 +947,6 @@ export default function ProductsPage() {
                 Add variant
               </button>
             </div>
-            <p className="mb-2 text-xs text-ink-500 dark:text-ink-400">
-              Leave the list empty and a default variant is created automatically — SKUs and EAN-13 barcodes are
-              generated for you. Enter a variant label as “{optionNames.join(' / ') || 'Standard'}”.
-            </p>
             <div className="space-y-2">
               {variantDrafts.map((draft, index) => (
                 <div key={index} className="grid grid-cols-[1fr_5rem_5rem_5rem_5rem_auto] gap-2">
