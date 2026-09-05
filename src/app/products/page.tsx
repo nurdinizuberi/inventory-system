@@ -151,11 +151,11 @@ export default function ProductsPage() {
   }, [view, load]);
 
   const optionNames = form.optionNames.split(',').map((s) => s.trim()).filter(Boolean);
-  // A product counts as "simple" only while no variant row actually carries a
-  // label. For plain products the selling/cost price fields belong to the
-  // product; once a real variant exists every variant owns its own price/cost
-  // and the product-level fields are hidden.
-  const isSimpleProduct = !variantDrafts.some((d) => d.label.trim() !== '');
+  // A product counts as "simple" only while no variant row has been added at
+  // all. The moment the user clicks "Add variant" the product becomes a variant
+  // product: the parent selling/cost price fields are hidden immediately (each
+  // variant will own its own price/cost, pre-filled from the parent defaults).
+  const isSimpleProduct = variantDrafts.length === 0;
 
   // ---- Form validation --------------------------------------------------
   const validate = (): Record<string, string> => {
