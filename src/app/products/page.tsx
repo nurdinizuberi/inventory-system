@@ -949,33 +949,38 @@ export default function ProductsPage() {
             </div>
             <div className="space-y-2">
               {variantDrafts.map((draft, index) => (
-                <div key={index} className="grid grid-cols-[1fr_5rem_5rem_5rem_5rem_auto] gap-2">
-                  <input
-                    className="input"
-                    placeholder={optionNames.join(' / ') || 'Standard'}
-                    value={draft.label}
-                    onChange={(e) => setVariantDrafts(variantDrafts.map((d, i) => (i === index ? { ...d, label: e.target.value } : d)))}
-                  />
-                  <input className="input" placeholder="cost" type="number" value={draft.cost}
-                    onChange={(e) => setVariantDrafts(variantDrafts.map((d, i) => (i === index ? { ...d, cost: e.target.value } : d)))} />
-                  <input className="input" placeholder="price" type="number" value={draft.price}
-                    onChange={(e) => setVariantDrafts(variantDrafts.map((d, i) => (i === index ? { ...d, price: e.target.value } : d)))} />
-                  <input className="input" placeholder="qty" type="number" min={0} value={draft.quantity || ''}
-                    onChange={(e) => setVariantDrafts(variantDrafts.map((d, i) => (i === index ? { ...d, quantity: Number(e.target.value), locationId: Number(e.target.value) > 0 && !d.locationId ? (openingLocations[0]?.id ?? '') : d.locationId } : d)))} />
-                  <button className="btn-ghost btn-sm"
-                    onClick={() => setVariantDrafts(variantDrafts.filter((_, i) => i !== index))} type="button">✕</button>
+                <div
+                  key={index}
+                  className="relative rounded-lg border border-ink-200 p-2.5 dark:border-ink-700 sm:rounded-none sm:border-0 sm:p-0"
+                >
+                  <div className="grid grid-cols-3 gap-2 sm:grid-cols-[1fr_5rem_5rem_5rem_auto] sm:items-center sm:gap-3">
+                    <input
+                      className="input col-span-3 pr-9 sm:col-span-1 sm:pr-0"
+                      placeholder={optionNames.join(' / ') || 'Standard'}
+                      value={draft.label}
+                      onChange={(e) => setVariantDrafts(variantDrafts.map((d, i) => (i === index ? { ...d, label: e.target.value } : d)))}
+                    />
+                    <input className="input" placeholder="cost" type="number" value={draft.cost}
+                      onChange={(e) => setVariantDrafts(variantDrafts.map((d, i) => (i === index ? { ...d, cost: e.target.value } : d)))} />
+                    <input className="input" placeholder="price" type="number" value={draft.price}
+                      onChange={(e) => setVariantDrafts(variantDrafts.map((d, i) => (i === index ? { ...d, price: e.target.value } : d)))} />
+                    <input className="input" placeholder="qty" type="number" min={0} value={draft.quantity || ''}
+                      onChange={(e) => setVariantDrafts(variantDrafts.map((d, i) => (i === index ? { ...d, quantity: Number(e.target.value), locationId: Number(e.target.value) > 0 && !d.locationId ? (openingLocations[0]?.id ?? '') : d.locationId } : d)))} />
+                    <button className="btn-ghost btn-sm absolute right-1 top-1 sm:static"
+                      onClick={() => setVariantDrafts(variantDrafts.filter((_, i) => i !== index))} type="button">✕</button>
+                  </div>
                   {formErrors[`variant_${index}_label`] && (
-                    <p className="col-span-6 text-xs text-red-500">{formErrors[`variant_${index}_label`]}</p>
+                    <p className="mt-1 text-xs text-red-500">{formErrors[`variant_${index}_label`]}</p>
                   )}
                   {formErrors[`variant_${index}_price`] && (
-                    <p className="col-span-6 text-xs text-red-500">{formErrors[`variant_${index}_price`]}</p>
+                    <p className="mt-1 text-xs text-red-500">{formErrors[`variant_${index}_price`]}</p>
                   )}
                   {formErrors[`variant_${index}_cost`] && (
-                    <p className="col-span-6 text-xs text-red-500">{formErrors[`variant_${index}_cost`]}</p>
+                    <p className="mt-1 text-xs text-red-500">{formErrors[`variant_${index}_cost`]}</p>
                   )}
                   {draft.quantity > 0 && (
-                    <div className="col-span-6 flex gap-2">
-                      <select className="input" value={draft.locationId}
+                    <div className="mt-1 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+                      <select className="input sm:flex-1" value={draft.locationId}
                         onChange={(e) => setVariantDrafts(variantDrafts.map((d, i) => (i === index ? { ...d, locationId: e.target.value } : d)))}>
                         <option value="">— location —</option>
                         {openingLocations.map((l) => (
