@@ -8,6 +8,7 @@ import { useAuth } from '@/components/auth-context';
 
 const REPORTS = [
   { href: '/reports/sales', label: 'Sales', permission: 'report.sales' },
+  { href: '/reports/analytics', label: 'Analytics', permission: 'report.sales' },
   { href: '/reports/stock', label: 'Current stock', permission: 'report.stock' },
   { href: '/reports/expiry', label: 'Approaching expiry', permission: 'report.stock' },
   { href: '/reports/reorder', label: 'Reorder suggestions', permission: 'report.stock' },
