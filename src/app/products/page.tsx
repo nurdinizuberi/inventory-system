@@ -1353,13 +1353,55 @@ export default function ProductsPage() {
                           label={v.isNew ? 'Opening quantity' : 'Quantity change'}
                           hint={!v.isNew ? `${v.onHand} on hand` : undefined}
                         >
-                          <input
-                            className="input"
-                            type="number"
-                            value={v.qty}
-                            placeholder={v.isNew ? '0' : '+/-'}
-                            onChange={(e) => setVariant(v.id, { qty: e.target.value })}
-                          />
+                          <div className="flex gap-2">
+                            <input
+                              className="input flex-1"
+                              type="text"
+                              inputMode="decimal"
+                              value={v.qty}
+                              placeholder={v.isNew ? '0' : '+/-'}
+                              onChange={(e) => {
+                                const raw = e.target.value.trim();
+                                if (/^-?\d*\.?\d*$/.test(raw)) setVariant(v.id, { qty: raw });
+                              }}
+                            />
+                            <div className="flex shrink-0 gap-1">
+                              {!v.isNew && (
+                                <button
+                                  className="btn-ghost btn-sm"
+                                  type="button"
+                                  aria-label="Toggle sign"
+                                  title="Make the change negative / positive"
+                                  onClick={() => {
+                                    const current = editQtyNum(v);
+                                    const next = current < 0 ? Math.abs(current) : -Math.max(1, Math.abs(current));
+                                    setVariant(v.id, { qty: String(next) });
+                                  }}
+                                >
+                                  ±
+                                </button>
+                              )}
+                              <button
+                                className="btn-ghost btn-sm"
+                                type="button"
+                                aria-label="Add one"
+                                onClick={() => setVariant(v.id, { qty: String(editQtyNum(v) + 1) })}
+                              >
+                                +1
+                              </button>
+                              <button
+                                className="btn-ghost btn-sm"
+                                type="button"
+                                aria-label="Subtract one"
+                                onClick={() => {
+                                  const next = editQtyNum(v) - 1;
+                                  setVariant(v.id, { qty: String(v.isNew ? Math.max(0, next) : next) });
+                                }}
+                              >
+                                −1
+                              </button>
+                            </div>
+                          </div>
                         </Field>
                         {(v.isNew ? editQtyNum(v) > 0 : editQtyNum(v) !== 0) && (
                           <Field label="Location">
