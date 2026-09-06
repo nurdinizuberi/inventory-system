@@ -1,12 +1,13 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { BackdateDialog, isBackdated, todayISO } from '@/components/backdate-dialog';
 import { Shell, PageHeader } from '@/components/shell';
 import { Badge, Card, Empty, Field, Modal, TableWrap, statusTone } from '@/components/ui';
 import { useAuth } from '@/components/auth-context';
 import { useToast } from '@/components/toast';
 import { api, errorMessage } from '@/lib/client';
-import { ADJUSTMENT_REASON_LABELS, type AdjustmentReason } from '@/lib/types';
+import { ADJUSTMENT_REASON_LABELS, BACKDATE_REASON_LABELS, type AdjustmentReason, type BackdateReason } from '@/lib/types';
 import { formatDate } from '@/lib/utils';
 
 interface Adjustment {
@@ -18,6 +19,9 @@ interface Adjustment {
   notes: string | null;
   createdAt: string;
   approvedAt: string | null;
+  effectiveDate: string;
+  backdateReason: string | null;
+  isBackdated: boolean;
   variant: { product: { name: string }; label: string } | null;
   location: { id: string; name: string };
   createdBy: { name: string } | null;
@@ -42,7 +46,16 @@ export default function AdjustmentsPage() {
   const [variants, setVariants] = useState<VariantOption[]>([]);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [form, setForm] = useState({ variantId: '', locationId: '', reason: 'count_correction', quantity: '-1', notes: '' });
+  const [backdateOpen, setBackdateOpen] = useState(false);
+  const [backdateReason, setBackdateReason] = useState<BackdateReason | null>(null);
+  const [form, setForm] = useState({
+    variantId: '',
+    locationId: '',
+    reason: 'count_correction',
+    quantity: '-1',
+    effectiveDate: todayISO(),
+    notes: '',
+  });
 
   const load = useCallback(async () => {
     const [adjustmentResult, locationResult, variantResult] = await Promise.allSettled([
@@ -63,7 +76,7 @@ export default function AdjustmentsPage() {
     void load();
   }, [load]);
 
-  const submit = async () => {
+  const doSubmit = async (reason: BackdateReason | null) => {
     setBusy(true);
     try {
       await api.post('/api/adjustments', {
@@ -71,16 +84,27 @@ export default function AdjustmentsPage() {
         locationId: form.locationId,
         reason: form.reason as AdjustmentReason,
         quantity: Number(form.quantity),
+        effectiveDate: form.effectiveDate,
+        backdateReason: reason,
         notes: form.notes || null,
       });
       toast.push('success', 'Adjustment raised — it needs manager approval before it touches stock.');
       setOpen(false);
+      setBackdateReason(null);
       await load();
     } catch (err) {
       toast.push('error', errorMessage(err));
     } finally {
       setBusy(false);
     }
+  };
+
+  const submit = async () => {
+    if (isBackdated(form.effectiveDate) && !backdateReason) {
+      setBackdateOpen(true);
+      return;
+    }
+    await doSubmit(backdateReason);
   };
 
   const decide = async (id: string, action: 'approve' | 'reject') => {
@@ -110,8 +134,10 @@ export default function AdjustmentsPage() {
                   locationId: user?.locations[0]?.id ?? '',
                   reason: 'count_correction',
                   quantity: '-1',
+                  effectiveDate: todayISO(),
                   notes: '',
                 });
+                setBackdateReason(null);
                 setOpen(true);
               }}
               type="button"
@@ -134,13 +160,21 @@ export default function AdjustmentsPage() {
                   <th>Reason</th>
                   <th className="text-right">Qty</th>
                   <th>Raised by</th>
+                  <th>Effective</th>
                   <th />
                 </tr>
               </thead>
               <tbody>
                 {pending.map((item) => (
                   <tr key={item.id}>
-                    <td className="font-mono font-medium">{item.number}</td>
+                    <td className="font-mono font-medium">
+                      {item.number}
+                      {item.isBackdated && (
+                        <span className="ml-2">
+                          <Badge tone="amber">Backdated</Badge>
+                        </span>
+                      )}
+                    </td>
                     <td>
                       {item.variant?.product.name} — {item.variant?.label}
                     </td>
@@ -150,6 +184,7 @@ export default function AdjustmentsPage() {
                       {item.quantity}
                     </td>
                     <td className="text-ink-600 dark:text-ink-300">{item.createdBy?.name ?? '—'}</td>
+                    <td className="text-ink-600 dark:text-ink-300">{formatDate(item.effectiveDate)}</td>
                     <td className="whitespace-nowrap text-right">
                       {can('stock.adjustApprove') ? (
                         <>
@@ -186,14 +221,21 @@ export default function AdjustmentsPage() {
                   <th>Reason</th>
                   <th className="text-right">Qty</th>
                   <th>Status</th>
-                  <th>Raised</th>
+                  <th>Effective</th>
                   <th>Approved by</th>
                 </tr>
               </thead>
               <tbody>
                 {items.map((item) => (
                   <tr key={item.id}>
-                    <td className="font-mono font-medium">{item.number}</td>
+                    <td className="font-mono font-medium">
+                      {item.number}
+                      {item.isBackdated && (
+                        <span className="ml-2">
+                          <Badge tone="amber">Backdated</Badge>
+                        </span>
+                      )}
+                    </td>
                     <td>
                       {item.variant?.product.name} — {item.variant?.label}
                       {item.notes && <p className="text-xs text-ink-500 dark:text-ink-400">{item.notes}</p>}
@@ -206,7 +248,7 @@ export default function AdjustmentsPage() {
                     <td>
                       <Badge tone={statusTone(item.status)}>{item.status}</Badge>
                     </td>
-                    <td>{formatDate(item.createdAt)}</td>
+                    <td>{formatDate(item.effectiveDate)}</td>
                     <td className="text-ink-600 dark:text-ink-300">{item.approvedBy?.name ?? '—'}</td>
                   </tr>
                 ))}
@@ -276,11 +318,36 @@ export default function AdjustmentsPage() {
               />
             </Field>
           </div>
+          <Field label="Effective date" hint="Defaults to today. Backdated entries require a reason.">
+            <input
+              className="input"
+              type="date"
+              value={form.effectiveDate}
+              max={todayISO()}
+              onChange={(e) => setForm({ ...form, effectiveDate: e.target.value })}
+            />
+          </Field>
+          {isBackdated(form.effectiveDate) && backdateReason && (
+            <p className="text-xs text-ink-500 dark:text-ink-400">
+              Backdated reason: {BACKDATE_REASON_LABELS[backdateReason]}
+            </p>
+          )}
           <Field label="Notes">
             <textarea className="input" rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
           </Field>
         </div>
       </Modal>
+
+      <BackdateDialog
+        open={backdateOpen}
+        date={form.effectiveDate}
+        onCancel={() => setBackdateOpen(false)}
+        onConfirm={(reason) => {
+          setBackdateReason(reason);
+          setBackdateOpen(false);
+          void doSubmit(reason);
+        }}
+      />
     </Shell>
   );
 }

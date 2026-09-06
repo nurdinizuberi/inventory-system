@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { audit } from '@/lib/audit';
+import { resolveBackdate } from '@/lib/backdate';
 import { prisma } from '@/lib/db';
 import { assertLocationAccess, badRequest, guard, jsonError, scopedLocationIds } from '@/lib/rbac';
 import { ADJUSTMENT_REASONS } from '@/lib/types';
@@ -11,6 +12,8 @@ const createSchema = z.object({
   reason: z.enum(ADJUSTMENT_REASONS),
   /** Negative = write-off, positive = found stock. */
   quantity: z.coerce.number().int().refine((n) => n !== 0, 'Quantity cannot be zero'),
+  effectiveDate: z.string().optional(), // YYYY-MM-DD for backdating
+  backdateReason: z.string().optional().nullable(),
   notes: z.string().optional().nullable(),
 });
 
@@ -72,6 +75,9 @@ export async function POST(request: Request) {
     const existing = await prisma.stockAdjustment.count({ where: { ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}) } });
     const number = `ADJ-${String(existing + 1).padStart(4, '0')}`;
 
+    const backdated = resolveBackdate(data.effectiveDate, data.backdateReason);
+    if (backdated.error) return badRequest(backdated.error);
+
     const adjustment = await prisma.stockAdjustment.create({
       data: {
         tenantId: ctx.tenantId ?? null,
@@ -82,6 +88,9 @@ export async function POST(request: Request) {
         quantity: data.quantity,
         notes: data.notes ?? null,
         status: 'pending',
+        effectiveDate: backdated.effectiveDate,
+        backdateReason: backdated.backdateReason,
+        isBackdated: backdated.isBackdated,
         createdById: ctx.id,
       },
       include: { variant: { include: { product: true } }, location: true },
@@ -100,7 +109,12 @@ export async function POST(request: Request) {
         variant: `${variant.product.name} — ${variant.label}`,
         location: adjustment.location.name,
       },
-      metadata: { status: 'pending' },
+      metadata: {
+        status: 'pending',
+        ...(backdated.isBackdated
+          ? { effectiveDate: data.effectiveDate, backdateReason: data.backdateReason }
+          : {}),
+      },
     });
 
     return NextResponse.json({ adjustment }, { status: 201 });

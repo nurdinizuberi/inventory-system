@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { audit } from '@/lib/audit';
+import { resolveBackdate } from '@/lib/backdate';
 import { prisma } from '@/lib/db';
 import { assertLocationAccess, badRequest, guard, jsonError, scopedLocationIds } from '@/lib/rbac';
 import { approvePurchase } from '@/lib/purchase-service';
@@ -43,7 +44,7 @@ export async function GET(request: Request) {
         ...(supplierId ? { supplierId } : {}),
         ...(scope ? { locationId: { in: scope } } : {}),
         ...(from || to
-          ? { orderDate: { ...(from ? { gte: new Date(from) } : {}), ...(to ? { lte: new Date(to) } : {}) } }
+          ? { effectiveDate: { ...(from ? { gte: new Date(from) } : {}), ...(to ? { lte: new Date(to) } : {}) } }
           : {}),
       },
       include: {
@@ -53,7 +54,7 @@ export async function GET(request: Request) {
         approvedBy: { select: { id: true, name: true } },
         lines: { include: { variant: { include: { product: true } }, batches: true } },
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { effectiveDate: 'desc' },
       take: 200,
     });
 
@@ -97,8 +98,10 @@ export async function POST(request: Request) {
     const existing = await prisma.purchase.count({ where: { ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}) } });
     const makeNumber = (attempt: number) => `PO-${String(existing + 1 + attempt).padStart(4, '0')}`;
 
-    const effectiveDate = data.effectiveDate ? new Date(data.effectiveDate) : new Date();
-    const isBackdated = effectiveDate < new Date();
+    const backdated = resolveBackdate(data.effectiveDate, data.backdateReason);
+    if (backdated.error) return badRequest(backdated.error);
+    const effectiveDate = backdated.effectiveDate;
+    const isBackdated = backdated.isBackdated;
 
     const purchase = await withRetryNumber(makeNumber, (number) =>
       prisma.purchase.create({

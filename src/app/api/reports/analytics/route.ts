@@ -30,7 +30,7 @@ export async function GET(request: Request) {
     const saleWhere = (gte: Date, lte: Date) => ({
       ...(ctx.tenantId ? { tenant: { id: ctx.tenantId } } : {}),
       status: 'completed',
-      soldAt: { gte, lte },
+      effectiveDate: { gte, lte },
       ...(locationFilter ? { location: { id: { in: locationFilter } } } : {}),
     });
 

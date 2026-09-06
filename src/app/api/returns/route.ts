@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { audit } from '@/lib/audit';
+import { resolveBackdate } from '@/lib/backdate';
 import { TX_OPTIONS, prisma } from '@/lib/db';
 import { assertLocationAccess, badRequest, guard, jsonError, scopedLocationIds } from '@/lib/rbac';
 import { recordMovement } from '@/lib/stock';
@@ -18,6 +19,8 @@ const createSchema = z.object({
   saleId: z.string().optional().nullable(),
   locationId: z.string().min(1, 'Location is required'),
   reason: z.string().default('customer_return'),
+  effectiveDate: z.string().optional(), // YYYY-MM-DD for backdating
+  backdateReason: z.string().optional().nullable(),
   lines: z.array(lineSchema).min(1, 'At least one returned item is required'),
 });
 
@@ -34,7 +37,7 @@ export async function GET(request: Request) {
         createdBy: { select: { id: true, name: true } },
         lines: { include: { variant: { include: { product: true } } } },
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { effectiveDate: 'desc' },
       take: 200,
     });
     return NextResponse.json({ returns });
@@ -91,6 +94,9 @@ export async function POST(request: Request) {
     const existing = await prisma.return.count({ where: { ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}) } });
     const number = `RT-${String(existing + 1).padStart(4, '0')}`;
 
+    const backdated = resolveBackdate(data.effectiveDate, data.backdateReason);
+    if (backdated.error) return badRequest(backdated.error);
+
     let refundTotal = 0;
     const result = await prisma.$transaction(async (tx) => {
       const returnRecord = await tx.return.create({
@@ -101,6 +107,9 @@ export async function POST(request: Request) {
           locationId: data.locationId,
           reason: data.reason,
           status: 'completed',
+          effectiveDate: backdated.effectiveDate,
+          backdateReason: backdated.backdateReason,
+          isBackdated: backdated.isBackdated,
           createdById: ctx.id,
           lines: {
             create: data.lines.map((l) => {
@@ -145,7 +154,7 @@ export async function POST(request: Request) {
                 unitCost: cost,
                 quantity: 0,
                 remainingQty: 0,
-                receivedAt: new Date(),
+                receivedAt: backdated.effectiveDate,
               },
             });
           }
@@ -168,6 +177,9 @@ export async function POST(request: Request) {
             referenceType: 'Return',
             referenceId: returnRecord.id,
             referenceLabel: number,
+            effectiveDate: backdated.effectiveDate,
+            backdateReason: backdated.backdateReason,
+            isBackdated: backdated.isBackdated,
             createdById: ctx.id,
             notes: `Customer return restocked as sellable (${data.reason})`,
           });
@@ -202,6 +214,9 @@ export async function POST(request: Request) {
             referenceType: 'Return',
             referenceId: returnRecord.id,
             referenceLabel: number,
+            effectiveDate: backdated.effectiveDate,
+            backdateReason: backdated.backdateReason,
+            isBackdated: backdated.isBackdated,
             createdById: ctx.id,
             notes: `Customer return written off as damaged (${data.reason})`,
           });
@@ -235,6 +250,9 @@ export async function POST(request: Request) {
         sale: saleId ?? null,
         reason: data.reason,
       },
+      metadata: backdated.isBackdated
+        ? { effectiveDate: data.effectiveDate, backdateReason: data.backdateReason }
+        : undefined,
     });
 
     return NextResponse.json({ return: result }, { status: 201 });

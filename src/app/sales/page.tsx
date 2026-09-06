@@ -14,6 +14,8 @@ interface Sale {
   number: string;
   status: string;
   soldAt: string;
+  effectiveDate: string;
+  isBackdated: boolean;
   total: number;
   profit: number;
   totalCost: number;
@@ -92,7 +94,7 @@ export default function SalesPage() {
   .foot { margin-top: 10px; color: #444; line-height: 1.5; }
 </style></head><body>
   <h1>${escapeHtml(sale.location.name)}</h1>
-  <div class="meta">${escapeHtml(sale.number)}<br>${formatDate(sale.soldAt, true)}</div>
+  <div class="meta">${escapeHtml(sale.number)}<br>${formatDate(sale.effectiveDate, true)}</div>
   <div class="rule"></div>
   <table>${rows}</table>
   <div class="rule"></div>
@@ -168,9 +170,14 @@ export default function SalesPage() {
                         type="button"
                       >
                         {sale.number}
+                        {sale.isBackdated && (
+                          <span className="ml-2">
+                            <Badge tone="amber">Backdated</Badge>
+                          </span>
+                        )}
                       </button>
                     </td>
-                    <td>{formatDate(sale.soldAt, true)}</td>
+                    <td>{formatDate(sale.effectiveDate, true)}</td>
                     <td className="text-ink-600 dark:text-ink-300">{sale.location.name}</td>
                     <td className="text-ink-600 dark:text-ink-300">{sale.cashier.name}</td>
                     <td className="text-right tabular-nums">{sale.lines.reduce((s, l) => s + l.quantity, 0)}</td>

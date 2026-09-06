@@ -515,6 +515,10 @@ model Return {
   location   Location @relation(fields: [locationId], references: [id])
   reason     String   @default("customer_return")
   status     String   @default("draft") // draft | completed | cancelled
+  // Backdating support
+  effectiveDate    DateTime @default(now())
+  backdateReason   String?
+  isBackdated      Boolean  @default(false)
   totalRefund Float   @default(0)
   createdById String
   createdBy  User     @relation("ReturnCreatedBy", fields: [createdById], references: [id])
@@ -567,6 +571,10 @@ model StockAdjustment {
   quantity   Int
   notes      String?
   status     String   @default("pending") // pending | approved | rejected
+  // Backdating support
+  effectiveDate    DateTime @default(now())
+  backdateReason   String?
+  isBackdated      Boolean  @default(false)
   createdById String
   createdBy  User?    @relation("AdjustmentCreatedBy", fields: [createdById], references: [id], onDelete: NoAction)
   approvedById String?

@@ -66,6 +66,9 @@ export async function PATCH(request: Request, { params }: Params) {
           referenceType: 'StockAdjustment',
           referenceId: adjustment.id,
           referenceLabel: adjustment.number,
+          effectiveDate: adjustment.effectiveDate,
+          backdateReason: adjustment.backdateReason,
+          isBackdated: adjustment.isBackdated,
           approvedById: ctx.id,
           createdById: ctx.id,
           variantLabel,
@@ -84,7 +87,7 @@ export async function PATCH(request: Request, { params }: Params) {
             unitCost: cost,
             quantity: adjustment.quantity,
             remainingQty: adjustment.quantity,
-            receivedAt: new Date(),
+            receivedAt: adjustment.effectiveDate,
           },
         });
         await recordMovement(tx, {
@@ -102,6 +105,9 @@ export async function PATCH(request: Request, { params }: Params) {
           referenceType: 'StockAdjustment',
           referenceId: adjustment.id,
           referenceLabel: adjustment.number,
+          effectiveDate: adjustment.effectiveDate,
+          backdateReason: adjustment.backdateReason,
+          isBackdated: adjustment.isBackdated,
           createdById: ctx.id,
           notes: `Adjustment ${adjustment.number} approved — stock found (${adjustment.reason})`,
         });

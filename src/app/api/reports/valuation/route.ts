@@ -46,8 +46,8 @@ export async function GET(request: Request) {
         ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}),
         ...(stockVariantIds.length ? { variantId: { in: stockVariantIds } } : { variantId: '__none__' }),
       },
-      select: { variantId: true, unitCost: true, quantity: true, createdAt: true },
-      orderBy: { createdAt: 'asc' },
+      select: { variantId: true, unitCost: true, quantity: true, effectiveDate: true },
+      orderBy: { effectiveDate: 'asc' },
     });
 
     const latestCost = new Map<string, number>();

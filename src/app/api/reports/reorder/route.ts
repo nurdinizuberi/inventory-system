@@ -49,8 +49,8 @@ export async function GET(request: Request) {
     const latestCost = new Map<string, number>();
     const costRows = await prisma.stockMovement.findMany({
       where: { type: 'purchase_in', unitCost: { not: null }, ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}) },
-      select: { variantId: true, unitCost: true, createdAt: true },
-      orderBy: { createdAt: 'desc' },
+      select: { variantId: true, unitCost: true, effectiveDate: true },
+      orderBy: { effectiveDate: 'desc' },
     });
     for (const row of costRows) {
       if (!latestCost.has(row.variantId) && row.unitCost !== null) latestCost.set(row.variantId, row.unitCost);

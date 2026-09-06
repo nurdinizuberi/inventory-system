@@ -26,12 +26,12 @@ export async function GET() {
 
     const [salesToday, sales7, pendingAdjustments, inTransit, drafts, expiringSoon] = await Promise.all([
       prisma.sale.aggregate({
-        where: { status: 'completed', soldAt: { gte: todayStart() }, ...inEffective },
+        where: { status: 'completed', effectiveDate: { gte: todayStart() }, ...inEffective },
         _sum: { total: true, profit: true, totalCost: true },
         _count: true,
       }),
       prisma.sale.findMany({
-        where: { status: 'completed', soldAt: { gte: daysAgo(7) }, ...inEffective },
+        where: { status: 'completed', effectiveDate: { gte: daysAgo(7) }, ...inEffective },
         include: { location: true },
       }),
       prisma.stockAdjustment.count({
@@ -96,7 +96,7 @@ export async function GET() {
       const day = daysAgo(i);
       const next = new Date(day);
       next.setDate(next.getDate() + 1);
-      const inDay = sales7.filter((s) => s.soldAt >= day && s.soldAt < next);
+      const inDay = sales7.filter((s) => s.effectiveDate >= day && s.effectiveDate < next);
       days.push({
         date: day.toISOString().slice(0, 10),
         revenue: round2(inDay.reduce((s, x) => s + x.total, 0)),

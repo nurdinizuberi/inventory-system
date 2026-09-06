@@ -19,7 +19,7 @@ export async function GET(request: Request) {
       where: {
         ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}),
         status: { in: ['confirmed', 'received'] },
-        orderDate: { gte: from, lte: to },
+        effectiveDate: { gte: from, lte: to },
         ...(supplierId ? { supplierId } : {}),
         ...(scope ? { locationId: { in: scope } } : {}),
         ...(!includeBackdated ? { isBackdated: false } : {}),
@@ -29,7 +29,7 @@ export async function GET(request: Request) {
         location: true,
         lines: { include: { variant: { include: { product: true } }, batches: true } },
       },
-      orderBy: { orderDate: 'desc' },
+      orderBy: { effectiveDate: 'desc' },
     });
 
     const bySupplier = new Map<string, { supplier: string; orders: number; units: number; value: number }>();
@@ -71,7 +71,7 @@ export async function GET(request: Request) {
         number: p.number,
         supplier: p.supplier.name,
         location: p.location.name,
-        orderDate: p.orderDate,
+        orderDate: p.effectiveDate,
         total: p.total,
         lines: p.lines.map((l) => ({
           variant: `${l.variant.product.name} — ${l.variant.label}`,

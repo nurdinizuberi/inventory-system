@@ -14,7 +14,7 @@ interface Report {
     status: string;
     from: string;
     to: string;
-    requestedAt: string;
+    effectiveDate: string;
     shippedAt: string | null;
     completedAt: string | null;
     createdBy: string;
@@ -112,7 +112,7 @@ export default function TransferReportPage() {
                     <th>From</th>
                     <th>To</th>
                     <th>Status</th>
-                    <th>Requested</th>
+                    <th>Effective</th>
                     <th>Shipped</th>
                     <th>Received</th>
                     <th className="text-right">Units</th>
@@ -128,7 +128,7 @@ export default function TransferReportPage() {
                       <td>
                         <Badge tone={statusTone(transfer.status)}>{transfer.status.replace('_', ' ')}</Badge>
                       </td>
-                      <td>{formatDate(transfer.requestedAt)}</td>
+                      <td>{formatDate(transfer.effectiveDate)}</td>
                       <td>{formatDate(transfer.shippedAt)}</td>
                       <td>{formatDate(transfer.completedAt)}</td>
                       <td className="text-right tabular-nums">{transfer.units}</td>

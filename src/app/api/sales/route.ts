@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { audit } from '@/lib/audit';
+import { resolveBackdate } from '@/lib/backdate';
 import { TX_OPTIONS, prisma } from '@/lib/db';
 import { consumeFifo, InsufficientStockError } from '@/lib/fifo';
 import { assertLocationAccess, badRequest, guard, jsonError, scopedLocationIds } from '@/lib/rbac';
@@ -45,7 +46,7 @@ export async function GET(request: Request) {
         ...(locationId ? { locationId } : {}),
         ...(scope ? { locationId: { in: scope } } : {}),
         ...(from || to
-          ? { soldAt: { ...(from ? { gte: new Date(from) } : {}), ...(to ? { lte: new Date(to) } : {}) } }
+          ? { effectiveDate: { ...(from ? { gte: new Date(from) } : {}), ...(to ? { lte: new Date(to) } : {}) } }
           : {}),
         // A cashier may only browse their own tickets.
         ...(ctx.role === 'CASHIER' ? { cashierId: ctx.id } : {}),
@@ -55,7 +56,7 @@ export async function GET(request: Request) {
         cashier: { select: { id: true, name: true } },
         lines: { include: { variant: { include: { product: true } } } },
       },
-      orderBy: { soldAt: 'desc' },
+      orderBy: { effectiveDate: 'desc' },
       take: 200,
     });
 
@@ -147,9 +148,11 @@ export async function POST(request: Request) {
     const makeNumber = (attempt: number) => `SLE-${String(existing + 1 + attempt).padStart(5, '0')}`;
     const soldAt = new Date();
 
-    // Backdating support
-    const effectiveDate = data.effectiveDate ? new Date(data.effectiveDate) : soldAt;
-    const isBackdated = effectiveDate < soldAt;
+    // Backdating support — ledger rows are stamped with the effective date.
+    const backdated = resolveBackdate(data.effectiveDate, data.backdateReason);
+    if (backdated.error) return badRequest(backdated.error);
+    const effectiveDate = backdated.effectiveDate;
+    const isBackdated = backdated.isBackdated;
 
     const result = await withRetryNumber(makeNumber, async (number) => {
       let auditPayload: Record<string, unknown> | null = null;
@@ -192,6 +195,9 @@ export async function POST(request: Request) {
             referenceType: 'Sale',
             referenceId: sale.id,
             referenceLabel: number,
+            effectiveDate,
+            backdateReason: data.backdateReason ?? null,
+            isBackdated,
             createdById: ctx.id,
             variantLabel: `${variant.product.name} — ${variant.label}`,
             locationName: location.name,

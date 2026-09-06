@@ -1,11 +1,13 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { BackdateDialog, isBackdated, todayISO } from '@/components/backdate-dialog';
 import { Shell, PageHeader } from '@/components/shell';
 import { Badge, Card, Empty, Field, Modal, TableWrap } from '@/components/ui';
 import { useAuth } from '@/components/auth-context';
 import { useToast } from '@/components/toast';
 import { api, errorMessage } from '@/lib/client';
+import { BACKDATE_REASON_LABELS, type BackdateReason } from '@/lib/types';
 import { currency, formatDate } from '@/lib/utils';
 
 interface ReturnRecord {
@@ -15,6 +17,9 @@ interface ReturnRecord {
   status: string;
   totalRefund: number;
   createdAt: string;
+  effectiveDate: string;
+  backdateReason: string | null;
+  isBackdated: boolean;
   location: { name: string };
   sale: { number: string } | null;
   createdBy: { name: string } | null;
@@ -37,6 +42,9 @@ export default function ReturnsPage() {
   const [sales, setSales] = useState<SaleOption[]>([]);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [backdateOpen, setBackdateOpen] = useState(false);
+  const [backdateReason, setBackdateReason] = useState<BackdateReason | null>(null);
+  const [effectiveDate, setEffectiveDate] = useState(todayISO());
   const [saleId, setSaleId] = useState('');
   const [reason, setReason] = useState('customer_return');
   const [lines, setLines] = useState<{ variantId: string; quantity: string; condition: string }[]>([]);
@@ -69,13 +77,15 @@ export default function ReturnsPage() {
     }
   };
 
-  const submit = async () => {
+  const doSubmit = async (backdate: BackdateReason | null) => {
     setBusy(true);
     try {
       await api.post('/api/returns', {
         saleId: saleId || null,
         locationId: selectedSale?.location.id ?? user?.locations[0]?.id,
         reason,
+        effectiveDate,
+        backdateReason: backdate,
         lines: lines
           .filter((l) => l.variantId)
           .map((l) => ({ variantId: l.variantId, quantity: Number(l.quantity), condition: l.condition })),
@@ -84,12 +94,21 @@ export default function ReturnsPage() {
       setOpen(false);
       setLines([]);
       setSaleId('');
+      setBackdateReason(null);
       await load();
     } catch (err) {
       toast.push('error', errorMessage(err));
     } finally {
       setBusy(false);
     }
+  };
+
+  const submit = async () => {
+    if (isBackdated(effectiveDate) && !backdateReason) {
+      setBackdateOpen(true);
+      return;
+    }
+    await doSubmit(backdateReason);
   };
 
   return (
@@ -104,6 +123,8 @@ export default function ReturnsPage() {
               onClick={() => {
                 void loadSales();
                 setLines([]);
+                setEffectiveDate(todayISO());
+                setBackdateReason(null);
                 setOpen(true);
               }}
               type="button"
@@ -134,11 +155,18 @@ export default function ReturnsPage() {
               <tbody>
                 {returns.map((record) => (
                   <tr key={record.id}>
-                    <td className="font-mono font-medium">{record.number}</td>
+                    <td className="font-mono font-medium">
+                      {record.number}
+                      {record.isBackdated && (
+                        <span className="ml-2">
+                          <Badge tone="amber">Backdated</Badge>
+                        </span>
+                      )}
+                    </td>
                     <td className="font-mono text-ink-600 dark:text-ink-300">{record.sale?.number ?? 'standalone'}</td>
                     <td className="text-ink-600 dark:text-ink-300">{record.location.name}</td>
                     <td className="text-ink-600 dark:text-ink-300">{record.reason.replace(/_/g, ' ')}</td>
-                    <td>{formatDate(record.createdAt, true)}</td>
+                    <td>{formatDate(record.effectiveDate, true)}</td>
                     <td>
                       <div className="flex flex-wrap gap-1">
                         {record.lines.map((line, index) => (
@@ -207,7 +235,22 @@ export default function ReturnsPage() {
                 <option value="warranty">Warranty claim</option>
               </select>
             </Field>
+            <Field label="Effective date" hint="Backdated returns require a reason">
+              <input
+                className="input"
+                type="date"
+                value={effectiveDate}
+                max={todayISO()}
+                onChange={(e) => setEffectiveDate(e.target.value)}
+              />
+            </Field>
           </div>
+
+          {isBackdated(effectiveDate) && backdateReason && (
+            <p className="text-xs text-ink-500 dark:text-ink-400">
+              Backdated reason: {BACKDATE_REASON_LABELS[backdateReason]}
+            </p>
+          )}
 
           {!saleId && (
             <p className="text-xs text-amber-700 dark:text-amber-400">
@@ -254,6 +297,17 @@ export default function ReturnsPage() {
           </p>
         </div>
       </Modal>
+
+      <BackdateDialog
+        open={backdateOpen}
+        date={effectiveDate}
+        onCancel={() => setBackdateOpen(false)}
+        onConfirm={(bReason) => {
+          setBackdateReason(bReason);
+          setBackdateOpen(false);
+          void doSubmit(bReason);
+        }}
+      />
     </Shell>
   );
 }

@@ -23,7 +23,7 @@ export async function GET(request: Request) {
     const where = {
       ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}),
       status: 'completed' as const,
-      soldAt: { gte: from, lte: to },
+      effectiveDate: { gte: from, lte: to },
       ...(locationId ? { locationId } : {}),
       ...(scope ? { locationId: { in: scope } } : {}),
       // When includeBackdated is off, exclude backdated entries
@@ -37,7 +37,7 @@ export async function GET(request: Request) {
         cashier: { select: { id: true, name: true } },
         lines: { include: { variant: { include: { product: true } } } },
       },
-      orderBy: { soldAt: 'asc' },
+      orderBy: { effectiveDate: 'asc' },
     });
 
     type Bucket = {
@@ -85,7 +85,7 @@ export async function GET(request: Request) {
         saleGroupKey = '__all__';
         saleGroupLabel = 'All variants';
       } else {
-        saleGroupKey = dayKey(sale.soldAt);
+        saleGroupKey = dayKey(sale.effectiveDate);
         saleGroupLabel = saleGroupKey;
       }
 
@@ -159,7 +159,7 @@ export async function GET(request: Request) {
       .map((sale) => ({
         id: sale.id,
         number: sale.number,
-        soldAt: sale.soldAt,
+        soldAt: sale.effectiveDate,
         location: sale.location.name,
         cashier: sale.cashier.name,
         total: sale.total,

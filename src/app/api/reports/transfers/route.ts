@@ -17,7 +17,7 @@ export async function GET(request: Request) {
     const transfers = await prisma.stockTransfer.findMany({
       where: {
         ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}),
-        requestedAt: { gte: from, lte: to },
+        effectiveDate: { gte: from, lte: to },
         ...(scope ? { OR: [{ fromLocationId: { in: scope } }, { toLocationId: { in: scope } }] } : {}),
         ...(!includeBackdated ? { isBackdated: false } : {}),
       },
@@ -27,7 +27,7 @@ export async function GET(request: Request) {
         createdBy: { select: { id: true, name: true } },
         lines: { include: { variant: { include: { product: true } } } },
       },
-      orderBy: { requestedAt: 'desc' },
+      orderBy: { effectiveDate: 'desc' },
     });
 
     // Value moved is taken from the ledger rows, not from a hand-kept total.
@@ -74,7 +74,7 @@ export async function GET(request: Request) {
           status: t.status,
           from: t.fromLocation.name,
           to: t.toLocation.name,
-          requestedAt: t.requestedAt,
+          effectiveDate: t.effectiveDate,
           shippedAt: t.shippedAt,
           completedAt: t.completedAt,
           createdBy: t.createdBy?.name ?? '—',

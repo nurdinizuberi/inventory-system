@@ -16,6 +16,8 @@ interface Purchase {
   number: string;
   status: string;
   orderDate: string;
+  effectiveDate: string;
+  isBackdated: boolean;
   total: number;
   notes: string | null;
   supplier: { id: string; name: string };
@@ -292,11 +294,16 @@ export default function PurchasesPage() {
                     <td>
                       <button className="font-mono font-medium hover:underline" onClick={() => openDetail(purchase)} type="button">
                         {purchase.number}
+                        {purchase.isBackdated && (
+                          <span className="ml-2">
+                            <Badge tone="amber">Backdated</Badge>
+                          </span>
+                        )}
                       </button>
                     </td>
                     <td>{purchase.supplier.name}</td>
                     <td className="text-ink-600 dark:text-ink-300">{purchase.location.name}</td>
-                    <td>{formatDate(purchase.orderDate)}</td>
+                    <td>{formatDate(purchase.effectiveDate)}</td>
                     <td className="text-right tabular-nums">
                       {purchase.lines.reduce((s, l) => s + l.quantity, 0)}
                       {receivedUnits(purchase) > 0 && (

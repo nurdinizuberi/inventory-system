@@ -24,7 +24,7 @@ export async function GET(request: Request) {
       where: {
         ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}),
         status: 'completed',
-        soldAt: { gte: from, lte: to },
+        effectiveDate: { gte: from, lte: to },
         ...(locationFilter ? { locationId: { in: locationFilter } } : {}),
       },
       include: { location: true },
@@ -40,7 +40,7 @@ export async function GET(request: Request) {
       where: {
         ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}),
         status: 'completed',
-        createdAt: { gte: from, lte: to },
+        effectiveDate: { gte: from, lte: to },
         ...(locationFilter ? { locationId: { in: locationFilter } } : {}),
       },
       include: { lines: true },
@@ -56,7 +56,7 @@ export async function GET(request: Request) {
         ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}),
         type: 'adjustment',
         adjustmentReason: { not: null },
-        createdAt: { gte: from, lte: to },
+        effectiveDate: { gte: from, lte: to },
         ...(locationFilter ? { locationId: { in: locationFilter } } : {}),
         // Ignore adjustments that merely reverse a cancelled/voided document.
         referenceType: { not: 'Sale' },

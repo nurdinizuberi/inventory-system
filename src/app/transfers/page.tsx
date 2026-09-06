@@ -15,6 +15,8 @@ interface Transfer {
   number: string;
   status: string;
   requestedAt: string;
+  effectiveDate: string;
+  isBackdated: boolean;
   shippedAt: string | null;
   completedAt: string | null;
   fromLocation: { id: string; name: string };
@@ -161,7 +163,7 @@ export default function TransfersPage() {
                 <tr>
                   <th>Number</th>
                   <th>Route</th>
-                  <th>Requested</th>
+                  <th>Effective</th>
                   <th>Shipped</th>
                   <th>Received</th>
                   <th className="text-right">Units</th>
@@ -172,13 +174,20 @@ export default function TransfersPage() {
               <tbody>
                 {transfers.map((transfer) => (
                   <tr key={transfer.id}>
-                    <td className="font-mono font-medium">{transfer.number}</td>
+                    <td className="font-mono font-medium">
+                      {transfer.number}
+                      {transfer.isBackdated && (
+                        <span className="ml-2">
+                          <Badge tone="amber">Backdated</Badge>
+                        </span>
+                      )}
+                    </td>
                     <td>
                       <span className="text-ink-600 dark:text-ink-300">{transfer.fromLocation.name}</span>
                       <span className="mx-1.5 text-ink-400 dark:text-ink-500">→</span>
                       <span className="font-medium">{transfer.toLocation.name}</span>
                     </td>
-                    <td>{formatDate(transfer.requestedAt)}</td>
+                    <td>{formatDate(transfer.effectiveDate)}</td>
                     <td>{formatDate(transfer.shippedAt)}</td>
                     <td>{formatDate(transfer.completedAt)}</td>
                     <td className="text-right tabular-nums">

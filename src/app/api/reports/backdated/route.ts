@@ -5,7 +5,7 @@ import { daysAgo } from '@/lib/utils';
 
 /**
  * Backdated entries report: all transactions where effectiveDate < createdAt,
- * across sales, purchases, transfers, and stock movements.
+ * across sales, purchases, transfers, adjustments, returns, and stock movements.
  * Restricted to admins.
  */
 export async function GET(request: Request) {
@@ -16,7 +16,8 @@ export async function GET(request: Request) {
     const since = daysAgo(days);
 
     const tenantFilter = ctx.tenantId ? { tenantId: ctx.tenantId } : {};
-    const [backdatedSales, backdatedPurchases, backdatedTransfers, backdatedMovements] = await Promise.all([
+    const [backdatedSales, backdatedPurchases, backdatedTransfers, backdatedAdjustments, backdatedReturns, backdatedMovements] =
+      await Promise.all([
       prisma.sale.findMany({
         where: { ...tenantFilter, isBackdated: true, createdAt: { gte: since } },
         select: {
@@ -56,6 +57,38 @@ export async function GET(request: Request) {
           createdAt: true,
           fromLocation: { select: { name: true } },
           toLocation: { select: { name: true } },
+          createdBy: { select: { name: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+      prisma.stockAdjustment.findMany({
+        where: { ...tenantFilter, isBackdated: true, createdAt: { gte: since } },
+        select: {
+          id: true,
+          number: true,
+          variantId: true,
+          effectiveDate: true,
+          backdateReason: true,
+          createdAt: true,
+          quantity: true,
+          reason: true,
+          variant: { select: { product: { select: { name: true } }, label: true } },
+          location: { select: { name: true } },
+          createdBy: { select: { name: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+      prisma.return.findMany({
+        where: { ...tenantFilter, isBackdated: true, createdAt: { gte: since } },
+        select: {
+          id: true,
+          number: true,
+          effectiveDate: true,
+          backdateReason: true,
+          createdAt: true,
+          totalRefund: true,
+          reason: true,
+          location: { select: { name: true } },
           createdBy: { select: { name: true } },
         },
         orderBy: { createdAt: 'desc' },
@@ -107,6 +140,24 @@ export async function GET(request: Request) {
         enteredAt: t.createdAt,
         details: `${t.fromLocation.name} → ${t.toLocation.name}`,
         value: null,
+      })),
+      ...backdatedAdjustments.map((a) => ({
+        type: 'Adjustment',
+        number: a.number,
+        effectiveDate: a.effectiveDate,
+        backdateReason: a.backdateReason,
+        enteredAt: a.createdAt,
+        details: `${a.variant?.product.name ?? a.variantId} — ${a.variant?.label ?? 'Unknown'} · ${a.quantity} @ ${a.location.name}`,
+        value: null,
+      })),
+      ...backdatedReturns.map((r) => ({
+        type: 'Return',
+        number: r.number,
+        effectiveDate: r.effectiveDate,
+        backdateReason: r.backdateReason,
+        enteredAt: r.createdAt,
+        details: `${r.location.name} (${r.reason.replace(/_/g, ' ')})`,
+        value: r.totalRefund,
       })),
       ...backdatedMovements.map((m) => ({
         type: 'Movement',

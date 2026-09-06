@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { audit } from '@/lib/audit';
+import { resolveBackdate } from '@/lib/backdate';
 import { prisma } from '@/lib/db';
 import { assertLocationAccess, badRequest, guard, jsonError, scopedLocationIds } from '@/lib/rbac';
 import { getStockMatrix } from '@/lib/stock';
@@ -108,8 +109,10 @@ export async function POST(request: Request) {
     const existing = await prisma.stockTransfer.count({ where: { ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}) } });
     const makeNumber = (attempt: number) => `TR-${String(existing + 1 + attempt).padStart(4, '0')}`;
 
-    const effectiveDate = data.effectiveDate ? new Date(data.effectiveDate) : new Date();
-    const isBackdated = effectiveDate < new Date();
+    const backdated = resolveBackdate(data.effectiveDate, data.backdateReason);
+    if (backdated.error) return badRequest(backdated.error);
+    const effectiveDate = backdated.effectiveDate;
+    const isBackdated = backdated.isBackdated;
 
     const transfer = await withRetryNumber(makeNumber, (number) =>
       prisma.stockTransfer.create({
