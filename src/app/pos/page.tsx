@@ -7,6 +7,7 @@ import { BackdateDialog, isBackdated, todayISO } from '@/components/backdate-dia
 import { useAuth } from '@/components/auth-context';
 import { useToast } from '@/components/toast';
 import { api, errorMessage } from '@/lib/client';
+import { computeTicketTotals } from '@/lib/pricing';
 import { currency } from '@/lib/utils';
 import type { BackdateReason } from '@/lib/types';
 
@@ -90,7 +91,9 @@ export default function PosPage() {
     if (!locationId) return;
     setLoading(true);
     try {
-      const data = await api.get<{ variants: PosVariant[] }>(`/api/variants?locationId=${locationId}`);
+      const data = await api.get<{ variants: PosVariant[] }>(
+        `/api/variants?locationId=${locationId}&pos=1`,
+      );
       setVariants(data.variants);
     } catch (err) {
       toast.push('error', errorMessage(err));
@@ -162,6 +165,15 @@ export default function PosPage() {
     );
   }, [variants, query]);
 
+  // Quantity already in the ticket per variant, to flag cards that are on the
+  // current ticket so a busy cashier can't tap the same product again by
+  // mistake (each product forms one cart line; the highlight shows its total).
+  const cartQty = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const line of cart) map.set(line.variant.id, line.quantity);
+    return map;
+  }, [cart]);
+
   const addLine = (variant: PosVariant, quantity = 1) => {
     setCart((current) => {
       const existing = current.find((line) => line.variant.id === variant.id);
@@ -216,26 +228,24 @@ export default function PosPage() {
 
   const keypadLine = cart.find((line) => line.variant.id === keypadVariantId);
 
-  const { subtotal, discountTotal, total, units } = useMemo(() => {
-  const sub = cart.reduce((sum, line) => sum + line.variant.sellingPrice * line.quantity, 0);
-  const disc = cart.reduce((sum, line) => sum + line.unitDiscount * line.quantity, 0);
-  return {
-    subtotal: sub,
-    discountTotal: disc,
-    total: sub - disc,
-    units: cart.reduce((sum, line) => sum + line.quantity, 0),
-  };
-}, [cart]);
+  const { subtotal, discountTotal, total, units, freeLines } = useMemo(
+    () =>
+      computeTicketTotals(
+        cart.map((line) => ({
+          unitPrice: line.variant.sellingPrice,
+          unitDiscount: line.unitDiscount,
+          quantity: line.quantity,
+        })),
+      ),
+    [cart],
+  );
 
-const paid = Number(amountPaid || 0);
+  const paid = Number(amountPaid || 0);
   const change = useMemo(() => Math.max(0, paid - total), [paid, total]);
 
   // A line may never sell for 0 — a full per-unit discount (or a 0 override)
   // would give the item away. While any line is free the ticket cannot be charged.
-  const freeLineCount = useMemo(
-    () => cart.filter((line) => line.variant.sellingPrice - line.unitDiscount <= 0).length,
-    [cart],
-  );
+  const freeLineCount = freeLines;
 
   const submit = async (backdateReason?: BackdateReason | null) => {
     if (!cart.length) return;
@@ -319,20 +329,32 @@ const paid = Number(amountPaid || 0);
             {!loading &&
               filtered.slice(0, 60).map((variant) => {
                 const disabled = variant.sellable <= 0;
+                const inTicket = cartQty.get(variant.id) ?? 0;
                 return (
                   <button
                     key={variant.id}
                     type="button"
                     disabled={disabled}
                     onClick={() => addLine(variant)}
+                    aria-pressed={inTicket > 0}
                     className={`card card-pad text-left transition ${
-                      disabled ? 'opacity-50' : 'hover:border-ink-400 dark:hover:border-ink-500 hover:shadow'
+                      inTicket > 0
+                        ? 'border-emerald-500 ring-2 ring-emerald-500/70 dark:border-emerald-500'
+                        : disabled
+                          ? 'opacity-50'
+                          : 'hover:border-ink-400 dark:hover:border-ink-500 hover:shadow'
                     }`}
                   >
                     <div className="flex items-start justify-between gap-2">
                       <p className="text-sm font-medium text-ink-900 dark:text-ink-100">{variant.displayName}</p>
-                      {variant.lowStock && !disabled && <Badge tone="amber">low</Badge>}
-                      {disabled && <Badge tone="red">out</Badge>}
+                      {inTicket > 0 ? (
+                        <Badge tone="green">✓ {inTicket} in ticket</Badge>
+                      ) : (
+                        <>
+                          {variant.lowStock && !disabled && <Badge tone="amber">low</Badge>}
+                          {disabled && <Badge tone="red">out</Badge>}
+                        </>
+                      )}
                     </div>
                     <p className="mt-1 font-mono text-xs text-ink-400 dark:text-ink-500">{variant.sku}</p>
                     <div className="mt-2 flex items-center justify-between">

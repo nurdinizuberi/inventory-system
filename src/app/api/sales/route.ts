@@ -4,6 +4,7 @@ import { audit } from '@/lib/audit';
 import { resolveBackdate } from '@/lib/backdate';
 import { TX_OPTIONS, prisma } from '@/lib/db';
 import { consumeFifo, InsufficientStockError } from '@/lib/fifo';
+import { computeTicketTotals } from '@/lib/pricing';
 import { assertLocationAccess, badRequest, guard, jsonError, scopedLocationIds } from '@/lib/rbac';
 import { getStockMatrix } from '@/lib/stock';
 import { PAYMENT_METHODS } from '@/lib/types';
@@ -97,12 +98,33 @@ export async function POST(request: Request) {
 
     // Catalog prices are guaranteed to be > 0, but a ticket must still charge more
     // than 0 per unit after any discount or manual price override — items can
-    // never go out the door for free.
+    // never go out the door for free. Pricing is computed with the same
+    // computeTicketTotals() the POS uses, so the amount shown to the customer is
+    // exactly what lands on the receipt.
+    const priceInfo = new Map(
+      data.lines.map((line) => {
+        const variant = variants.find((v) => v.id === line.variantId)!;
+        const unitPrice = variant.sellingPrice ?? variant.product.basePrice;
+        const actualPrice =
+          line.actualPrice != null ? line.actualPrice : round2(Math.max(0, unitPrice - line.unitDiscount));
+        return [line.variantId, { variant, unitPrice, actualPrice }] as const;
+      }),
+    );
+
+    const totals = computeTicketTotals(
+      data.lines.map((line) => {
+        const info = priceInfo.get(line.variantId)!;
+        return {
+          unitPrice: info.unitPrice,
+          unitDiscount: line.unitDiscount,
+          quantity: line.quantity,
+          actualPrice: info.actualPrice,
+        };
+      }),
+    );
+
     const freeSales = data.lines.flatMap((line) => {
-      const variant = variants.find((v) => v.id === line.variantId)!;
-      const unitPrice = variant.sellingPrice ?? variant.product.basePrice;
-      const actualPrice =
-        line.actualPrice != null ? line.actualPrice : round2(Math.max(0, unitPrice - line.unitDiscount));
+      const { variant, unitPrice, actualPrice } = priceInfo.get(line.variantId)!;
       if (!(unitPrice > 0)) return [`${variant.product.name} — ${variant.label} has no list selling price`];
       if (!(actualPrice > 0)) {
         return [
@@ -174,14 +196,10 @@ export async function POST(request: Request) {
           },
         });
 
-        let subtotal = 0;
-        let discountTotal = 0;
         let totalCost = 0;
 
         for (const line of data.lines) {
-          const variant = variants.find((v) => v.id === line.variantId)!;
-          const unitPrice = variant.sellingPrice ?? variant.product.basePrice;
-          const actualPrice = line.actualPrice ?? Math.max(0, unitPrice - line.unitDiscount);
+          const { variant, unitPrice, actualPrice } = priceInfo.get(line.variantId)!;
           const lineTotal = round2(actualPrice * line.quantity);
 
           // FIFO: deduct from the oldest available batch first and capture its cost.
@@ -206,8 +224,6 @@ export async function POST(request: Request) {
 
           const lineCost = round2(fifo.totalCost);
           const discountAmount = round2((unitPrice - actualPrice) * line.quantity);
-          subtotal += unitPrice * line.quantity;
-          discountTotal += discountAmount;
           totalCost += lineCost;
 
           await tx.saleLine.create({
@@ -226,13 +242,13 @@ export async function POST(request: Request) {
           });
         }
 
-        const total = round2(subtotal - discountTotal);
+        const total = totals.total;
         const amountPaid = data.amountPaid ?? total;
         const done = await tx.sale.update({
           where: { id: sale.id },
           data: {
-            subtotal: round2(subtotal),
-            discountAmount: round2(discountTotal),
+            subtotal: totals.subtotal,
+            discountAmount: totals.discountTotal,
             total,
             amountPaid: round2(amountPaid),
             changeDue: round2(Math.max(0, amountPaid - total)),
