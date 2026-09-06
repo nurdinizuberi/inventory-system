@@ -98,3 +98,22 @@ export const BACKDATE_REASON_LABELS: Record<BackdateReason, string> = {
   manual_correction: 'Manual correction',
   other: 'Other',
 };
+
+export const PRODUCT_EDIT_REASONS = [
+  'adding_new_variants',
+  'stock_recounting',
+  'price_update',
+  'cost_update',
+  'product_info_update',
+  'other',
+] as const;
+export type ProductEditReason = (typeof PRODUCT_EDIT_REASONS)[number];
+
+export const PRODUCT_EDIT_REASON_LABELS: Record<ProductEditReason, string> = {
+  adding_new_variants: 'Adding new variants',
+  stock_recounting: 'Stock recounting',
+  price_update: 'Price update',
+  cost_update: 'Cost update',
+  product_info_update: 'Product information update',
+  other: 'Other',
+};

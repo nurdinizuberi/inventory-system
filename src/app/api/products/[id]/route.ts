@@ -132,7 +132,13 @@ export async function PATCH(request: Request, { params }: Params) {
       entityLabel: product.name,
       before,
       after: product,
-      metadata: revalueCost !== null ? { revaluation: revalueCost, reason: payload.reason } : undefined,
+      metadata:
+        revalueCost !== null || payload.reason
+          ? {
+              ...(revalueCost !== null ? { revaluation: revalueCost } : {}),
+              ...(payload.reason ? { reason: payload.reason } : {}),
+            }
+          : undefined,
     });
 
     return NextResponse.json({ product });

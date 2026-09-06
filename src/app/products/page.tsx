@@ -6,6 +6,7 @@ import { Badge, Card, Empty, Field, Modal, TableWrap } from '@/components/ui';
 import { useAuth } from '@/components/auth-context';
 import { useToast } from '@/components/toast';
 import { api, errorMessage } from '@/lib/client';
+import { PRODUCT_EDIT_REASON_LABELS, PRODUCT_EDIT_REASONS, type ProductEditReason } from '@/lib/types';
 import { currency } from '@/lib/utils';
 
 interface Variant {
@@ -117,7 +118,8 @@ export default function ProductsPage() {
   const [editing, setEditing] = useState<Product | null>(null);
   const [editForm, setEditForm] = useState(EMPTY_FORM);
   const [editVariants, setEditVariants] = useState<VariantEdit[]>([]);
-  const [editReason, setEditReason] = useState('');
+  const [editReason, setEditReason] = useState<ProductEditReason | ''>('');
+  const [editReasonOther, setEditReasonOther] = useState('');
   const origProductCost = useRef<number | null>(null);
 
   // Category management
@@ -303,6 +305,7 @@ export default function ProductsPage() {
   const openEdit = (product: Product) => {
     setEditing(product);
     setEditReason('');
+    setEditReasonOther('');
     origProductCost.current = product.costPrice;
     const active = product.variants.filter((v) => v.isActive);
     const isSimple = active.length === 1 && active[0].isDefault && active[0].label === 'Standard';
@@ -406,9 +409,7 @@ export default function ProductsPage() {
           costPrice: writeProductPrices ? Number(editForm.costPrice || 0) : 0,
           categoryId: editForm.categoryId || null,
           optionNames: newOptionNames,
-          ...(showProductPrices && Number(editForm.costPrice) !== origProductCost.current
-            ? { reason: editReason.trim() }
-            : {}),
+          ...(editReasonFinal ? { reason: editReasonFinal } : {}),
         });
 
       const updateVariants = async () => {
@@ -421,7 +422,7 @@ export default function ProductsPage() {
             costPrice: v.cost !== '' ? Number(v.cost) : null,
             sellingPrice: v.price !== '' ? Number(v.price) : null,
             lowStockThreshold: Number(v.lowStock) || 10,
-            ...(editCostChanged(v) || editQtyChanged(v) ? { reason: editReason.trim() } : {}),
+            ...(editCostChanged(v) || editQtyChanged(v) ? { reason: editReasonFinal } : {}),
             ...(editQtyChanged(v) ? { stockLocationId: v.locationId } : {}),
             ...(editQtyChanged(v) && !v.isNew ? { quantityDelta: editQtyNum(v) } : {}),
           };
@@ -610,7 +611,16 @@ export default function ProductsPage() {
   const hasStockChanges =
     (showProductPrices && Number(editForm.costPrice) !== origProductCost.current) ||
     editVariants.some((v) => editCostChanged(v) || editQtyChanged(v));
-  const reasonRequired = hasStockChanges && !editReason.trim();
+  // The picker stores the chosen reason key; 'other' maps to free text. The
+  // value actually recorded is the human-readable label so it reads well in the
+  // stock ledger notes and audit metadata.
+  const editReasonFinal =
+    editReason === 'other'
+      ? editReasonOther.trim()
+      : editReason
+        ? PRODUCT_EDIT_REASON_LABELS[editReason]
+        : '';
+  const reasonRequired = hasStockChanges && !editReasonFinal;
 
   // A variant product sells and values each variant on its own, so a selling
   // price or cost of 0 (or blank) would sell or value stock at 0. Require both to
@@ -1132,21 +1142,37 @@ export default function ProductsPage() {
                 </Field>
               </>
             )}
-            {hasStockChanges && (
-              <Field
-                label="Reason for stock change"
-                hint="Required — this is recorded on the stock ledger."
-                className="sm:col-span-2"
+            <Field
+              label="Reason for edit"
+              hint={
+                hasStockChanges
+                  ? 'Required for cost or stock changes — recorded on the stock ledger and audit log.'
+                  : 'Recorded on the audit log.'
+              }
+              className="sm:col-span-2"
+            >
+              <select
+                className="input"
+                value={editReason}
+                onChange={(e) => setEditReason(e.target.value as ProductEditReason | '')}
               >
+                <option value="">— choose a reason —</option>
+                {PRODUCT_EDIT_REASONS.map((r) => (
+                  <option key={r} value={r}>
+                    {PRODUCT_EDIT_REASON_LABELS[r]}
+                  </option>
+                ))}
+              </select>
+              {editReason === 'other' && (
                 <input
-                  className="input"
-                  value={editReason}
-                  placeholder="e.g. Cost correction"
-                  onChange={(e) => setEditReason(e.target.value)}
+                  className="input mt-2"
+                  value={editReasonOther}
+                  placeholder="Describe the reason…"
+                  onChange={(e) => setEditReasonOther(e.target.value)}
                 />
-                {reasonRequired && <p className="mt-1 text-xs text-red-500">A reason is required.</p>}
-              </Field>
-            )}
+              )}
+              {reasonRequired && <p className="mt-1 text-xs text-red-500">A reason is required for cost or quantity changes.</p>}
+            </Field>
             <Field label="Option names" hint="Comma separated, e.g. Size,Color" className="sm:col-span-2">
               <input
                 className="input"
