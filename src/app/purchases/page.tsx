@@ -28,8 +28,9 @@ interface Purchase {
     receivedQty: number;
     unitCost: number;
     lineTotal: number;
+    expiresAt: string | null;
     variant: { id: string; sku: string; label: string; product: { name: string } };
-    batch: { code: string } | null;
+    batches: { code: string }[];
   }[];
 }
 
@@ -62,6 +63,15 @@ interface SupplierOption {
   name: string;
 }
 
+interface EditLine {
+  variantId: string;
+  quantity: string;
+  unitCost: string;
+  expiresAt: string;
+}
+
+const emptyLine = (): EditLine => ({ variantId: '', quantity: '1', unitCost: '0', expiresAt: '' });
+
 export default function PurchasesPage() {
   const { can } = useAuth();
   const toast = useToast();
@@ -73,9 +83,11 @@ export default function PurchasesPage() {
   const [busy, setBusy] = useState(false);
   const [detail, setDetail] = useState<Purchase | null>(null);
   const [filter, setFilter] = useState('all');
+  const [receiveOpen, setReceiveOpen] = useState(false);
+  const [receiveLines, setReceiveLines] = useState<{ lineId: string; quantity: string }[]>([]);
 
   const [form, setForm] = useState({ supplierId: '', locationId: '', notes: '', confirm: true });
-  const [lines, setLines] = useState<{ variantId: string; quantity: string; unitCost: string }[]>([]);
+  const [lines, setLines] = useState<EditLine[]>([emptyLine()]);
   const [effectiveDate, setEffectiveDate] = useState(todayISO());
   const [backdateWarningOpen, setBackdateWarningOpen] = useState(false);
 
@@ -131,17 +143,18 @@ export default function PurchasesPage() {
             variantId: line.variantId,
             quantity: Number(line.quantity),
             unitCost: Number(line.unitCost),
+            expiresAt: line.expiresAt || null,
           })),
       });
       const targetName = locations.find((l) => l.id === form.locationId)?.name;
       toast.push(
         'success',
         form.confirm
-          ? `Purchase confirmed — stock received into ${targetName ?? 'the location'}.`
+          ? `Order confirmed for ${targetName ?? 'the location'} — receive the goods when they arrive.`
           : 'Draft purchase saved.',
       );
       setOpen(false);
-      setLines([]);
+      setLines([emptyLine()]);
       await load();
     } catch (err) {
       toast.push('error', errorMessage(err));
@@ -153,7 +166,7 @@ export default function PurchasesPage() {
   const act = async (id: string, action: 'confirm' | 'cancel') => {
     try {
       await api.patch(`/api/purchases/${id}`, { action });
-      toast.push('success', action === 'confirm' ? 'Goods received — batches opened.' : 'Purchase cancelled.');
+      toast.push('success', action === 'confirm' ? 'Order confirmed — awaiting receipt.' : 'Purchase cancelled.');
       await load();
       setDetail(null);
     } catch (err) {
@@ -170,26 +183,66 @@ export default function PurchasesPage() {
     }
   };
 
+  const openReceive = (purchase: Purchase) => {
+    setDetail(purchase);
+    setReceiveLines(
+      purchase.lines.map((line) => ({ lineId: line.id, quantity: String(line.quantity - line.receivedQty) })),
+    );
+    setReceiveOpen(true);
+  };
+
+  const submitReceive = async () => {
+    if (!detail) return;
+    const request = receiveLines.filter((l) => Number(l.quantity) > 0);
+    if (!request.length) {
+      toast.push('error', 'Enter a quantity to receive for at least one line.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const result = await api.patch<{ purchase: Purchase }>(`/api/purchases/${detail.id}`, {
+        action: 'receive',
+        lines: request.map((l) => ({ lineId: l.lineId, quantity: Number(l.quantity) })),
+      });
+      toast.push(
+        'success',
+        result.purchase.status === 'received'
+          ? 'Received — the full order is now on the shelf.'
+          : 'Partial receipt recorded — batches opened.',
+      );
+      setReceiveOpen(false);
+      setDetail(result.purchase);
+      await load();
+    } catch (err) {
+      toast.push('error', errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const receivedUnits = (purchase: Purchase) => purchase.lines.reduce((sum, l) => sum + l.receivedQty, 0);
+
   return (
-    <Shell>        <PageHeader
-          title="Purchases"
-          description="Goods can be received into a warehouse or straight into any retail store — choose whichever location the delivery is going to. Confirming opens a costed batch per line and writes purchase_in ledger rows."
-          action={
-            can('purchase.create') && (
-              <button
-                className="btn-primary"
-                onClick={() => {
-                  setForm({ ...form, locationId: receivingLocations[0]?.id ?? '', supplierId: suppliers[0]?.id ?? '' });
-                  setLines([{ variantId: '', quantity: '1', unitCost: '0' }]);
-                  setOpen(true);
-                }}
-                type="button"
-              >
-                New purchase
-              </button>
-            )
-          }
-        />
+    <Shell>
+      <PageHeader
+        title="Purchases"
+        description="Ordering and receiving are separate steps: confirm the order, then receive the goods per line as they arrive — in full or in partial lots, each with its own batch."
+        action={
+          can('purchase.create') && (
+            <button
+              className="btn-primary"
+              onClick={() => {
+                setForm({ ...form, locationId: receivingLocations[0]?.id ?? '', supplierId: suppliers[0]?.id ?? '' });
+                setLines([emptyLine()]);
+                setOpen(true);
+              }}
+              type="button"
+            >
+              New purchase
+            </button>
+          )
+        }
+      />
 
       {receivingLocations.length === 0 && (
         <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
@@ -203,7 +256,7 @@ export default function PurchasesPage() {
       )}
 
       <div className="mb-4 flex gap-2">
-        {['all', 'draft', 'confirmed', 'cancelled'].map((status) => (
+        {['all', 'draft', 'confirmed', 'received', 'cancelled'].map((status) => (
           <button
             key={status}
             className={`btn btn-sm ${filter === status ? 'btn-primary' : 'btn-secondary'}`}
@@ -218,14 +271,15 @@ export default function PurchasesPage() {
       <Card>
         {purchases.length === 0 ? (
           <Empty message="No purchase orders in this view." />
-        ) : (            <TableWrap>
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Number</th>
-                    <th>Supplier</th>
-                    <th>Receive at</th>
-                    <th>Date</th>
+        ) : (
+          <TableWrap>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Number</th>
+                  <th>Supplier</th>
+                  <th>Receive at</th>
+                  <th>Date</th>
                   <th className="text-right">Lines</th>
                   <th className="text-right">Total</th>
                   <th>Status</th>
@@ -243,18 +297,33 @@ export default function PurchasesPage() {
                     <td>{purchase.supplier.name}</td>
                     <td className="text-ink-600 dark:text-ink-300">{purchase.location.name}</td>
                     <td>{formatDate(purchase.orderDate)}</td>
-                    <td className="text-right tabular-nums">{purchase.lines.length}</td>
+                    <td className="text-right tabular-nums">
+                      {purchase.lines.reduce((s, l) => s + l.quantity, 0)}
+                      {receivedUnits(purchase) > 0 && (
+                        <span className="block text-xs text-ink-400">rec {receivedUnits(purchase)}</span>
+                      )}
+                    </td>
                     <td className="text-right tabular-nums">{currency(purchase.total)}</td>
                     <td>
                       <Badge tone={statusTone(purchase.status)}>{purchase.status.replace('_', ' ')}</Badge>
                     </td>
-                    <td className="text-right">
+                    <td className="text-right whitespace-nowrap">
                       {purchase.status === 'draft' && can('purchase.confirm') && (
                         <button className="btn-secondary btn-sm" onClick={() => act(purchase.id, 'confirm')} type="button">
+                          Confirm
+                        </button>
+                      )}
+                      {purchase.status === 'confirmed' && can('purchase.confirm') && (
+                        <button
+                          className="btn-secondary btn-sm"
+                          onClick={() => openReceive(purchase)}
+                          type="button"
+                          {...(purchase.lines.every((l) => l.receivedQty >= l.quantity) ? {} : {})}
+                        >
                           Receive
                         </button>
                       )}
-                      {purchase.status !== 'cancelled' && can('purchase.cancel') && (
+                      {purchase.status !== 'cancelled' && receivedUnits(purchase) === 0 && can('purchase.cancel') && (
                         <button className="btn-ghost btn-sm" onClick={() => act(purchase.id, 'cancel')} type="button">
                           Cancel
                         </button>
@@ -290,7 +359,7 @@ export default function PurchasesPage() {
               }}
               type="button"
             >
-              {busy ? 'Saving…' : form.confirm ? `Confirm & receive — ${currency(total)}` : 'Save draft'}
+              {busy ? 'Saving…' : form.confirm ? `Save & confirm order — ${currency(total)}` : 'Save draft'}
             </button>
           </>
         }
@@ -326,14 +395,14 @@ export default function PurchasesPage() {
                 {receivingLocations.length === 0 && <option disabled>No receiving location — see Locations page</option>}
               </select>
             </Field>
-            <Field label="On confirm">
+            <Field label="On save">
               <select
                 className="input"
                 value={form.confirm ? 'confirm' : 'draft'}
                 onChange={(e) => setForm({ ...form, confirm: e.target.value === 'confirm' })}
               >
-                <option value="confirm">Receive stock now</option>
-                <option value="draft">Save as draft</option>
+                <option value="draft">Save as draft (wait for arrival)</option>
+                <option value="confirm">Save & confirm order now</option>
               </select>
             </Field>
           </div>
@@ -343,7 +412,7 @@ export default function PurchasesPage() {
               <span className="label mb-0">Line items</span>
               <button
                 className="btn-secondary btn-sm"
-                onClick={() => setLines([...lines, { variantId: '', quantity: '1', unitCost: '0' }])}
+                onClick={() => setLines([...lines, emptyLine()])}
                 type="button"
               >
                 Add line
@@ -356,14 +425,15 @@ export default function PurchasesPage() {
                   archived — archived products don’t appear here.
                 </p>
               )}
-              <div className="grid grid-cols-[1fr_6rem_8rem_auto] gap-2">
+              <div className="grid grid-cols-[1fr_5rem_7rem_9rem_auto] gap-2">
                 <span className="label mb-0">Variant</span>
                 <span className="label mb-0">Quantity</span>
                 <span className="label mb-0">Unit cost</span>
+                <span className="label mb-0">Expiry (optional)</span>
                 <span />
               </div>
               {lines.map((line, index) => (
-                <div key={index} className="grid grid-cols-[1fr_6rem_8rem_auto] gap-2">
+                <div key={index} className="grid grid-cols-[1fr_5rem_7rem_9rem_auto] gap-2">
                   <select
                     className="input"
                     value={line.variantId}
@@ -399,6 +469,13 @@ export default function PurchasesPage() {
                     value={line.unitCost}
                     onChange={(e) => setLines(lines.map((l, i) => (i === index ? { ...l, unitCost: e.target.value } : l)))}
                   />
+                  <input
+                    className="input"
+                    type="date"
+                    value={line.expiresAt}
+                    onChange={(e) => setLines(lines.map((l, i) => (i === index ? { ...l, expiresAt: e.target.value } : l)))}
+                    title="Best-before date of this lot — copied to the batch when received"
+                  />
                   <button className="btn-ghost btn-sm" onClick={() => setLines(lines.filter((_, i) => i !== index))} type="button">
                     ✕
                   </button>
@@ -431,7 +508,7 @@ export default function PurchasesPage() {
                 <p>{detail.supplier.name}</p>
               </div>
               <div>
-                <span className="label">Received at</span>
+                <span className="label">Receive at</span>
                 <p>{detail.location.name}</p>
               </div>
               <div>
@@ -450,7 +527,8 @@ export default function PurchasesPage() {
                     <th className="text-right">Received</th>
                     <th className="text-right">Unit cost</th>
                     <th className="text-right">Line total</th>
-                    <th>Batch</th>
+                    <th>Expiry</th>
+                    <th>Batches</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -464,7 +542,12 @@ export default function PurchasesPage() {
                       <td className="text-right tabular-nums">{line.receivedQty}</td>
                       <td className="text-right tabular-nums">{currency(line.unitCost)}</td>
                       <td className="text-right tabular-nums">{currency(line.lineTotal)}</td>
-                      <td className="font-mono text-xs text-ink-500 dark:text-ink-400">{line.batch?.code ?? '—'}</td>
+                      <td className="whitespace-nowrap tabular-nums">
+                        {line.expiresAt ? formatDate(line.expiresAt) : '—'}
+                      </td>
+                      <td className="font-mono text-xs text-ink-500 dark:text-ink-400">
+                        {line.batches.map((b) => b.code).join(', ') || '—'}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -474,15 +557,93 @@ export default function PurchasesPage() {
             <div className="flex flex-wrap justify-end gap-2">
               {detail.status === 'draft' && can('purchase.confirm') && (
                 <button className="btn-primary" onClick={() => act(detail.id, 'confirm')} type="button">
-                  Confirm & receive
+                  Confirm order
                 </button>
               )}
-              {detail.status !== 'cancelled' && can('purchase.cancel') && (
+              {detail.status === 'confirmed' && can('purchase.confirm') && (
+                <button className="btn-primary" onClick={() => openReceive(detail)} type="button">
+                  Receive stock
+                </button>
+              )}
+              {detail.status === 'received' && <p className="muted">Fully received — nothing left to do.</p>}
+              {detail.status !== 'cancelled' && receivedUnits(detail) === 0 && can('purchase.cancel') && (
                 <button className="btn-danger" onClick={() => act(detail.id, 'cancel')} type="button">
                   Cancel purchase
                 </button>
               )}
             </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={receiveOpen}
+        title={`Receive goods — ${detail?.number ?? ''}`}
+        wide
+        onClose={() => setReceiveOpen(false)}
+        footer={
+          <>
+            <button className="btn-secondary" onClick={() => setReceiveOpen(false)} type="button">
+              Back
+            </button>
+            <button className="btn-primary" disabled={busy} onClick={() => void submitReceive()} type="button">
+              {busy ? 'Receiving…' : 'Record receipt'}
+            </button>
+          </>
+        }
+      >
+        {detail && (
+          <div className="space-y-3">
+            <p className="muted">
+              Receiving into <strong>{detail.location.name}</strong>. Enter the quantity that actually arrived for
+              each line — the rest stays on order. Each line you receive opens a fresh costed batch.
+            </p>
+            <TableWrap>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Variant</th>
+                    <th className="text-right">Ordered</th>
+                    <th className="text-right">Received</th>
+                    <th className="text-right">Remaining</th>
+                    <th>Expiry</th>
+                    <th className="w-32">Receive now</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {detail.lines.map((line) => {
+                    const remaining = line.quantity - line.receivedQty;
+                    return (
+                      <tr key={line.id}>
+                        <td>
+                          {line.variant.product.name} — {line.variant.label}
+                        </td>
+                        <td className="text-right tabular-nums">{line.quantity}</td>
+                        <td className="text-right tabular-nums">{line.receivedQty}</td>
+                        <td className="text-right tabular-nums">{remaining}</td>
+                        <td className="whitespace-nowrap tabular-nums">
+                          {line.expiresAt ? formatDate(line.expiresAt) : <span className="text-ink-400">—</span>}
+                        </td>
+                        <td>
+                          <input
+                            className="input py-1 text-sm"
+                            type="number"
+                            min={0}
+                            max={remaining}
+                            value={receiveLines.find((r) => r.lineId === line.id)?.quantity ?? '0'}
+                            onChange={(e) =>
+                              setReceiveLines((rows) =>
+                                rows.map((r) => (r.lineId === line.id ? { ...r, quantity: e.target.value } : r)),
+                              )
+                            }
+                          />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </TableWrap>
           </div>
         )}
       </Modal>

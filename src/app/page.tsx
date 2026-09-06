@@ -21,6 +21,7 @@ interface DashboardData {
     pendingAdjustments: number;
     inTransit: number;
     draftPurchases: number;
+    expiringSoon: number;
   };
   sparkline: { date: string; revenue: number; profit: number }[];
   lowStock: {
@@ -125,6 +126,14 @@ export default function DashboardPage() {
                   <span className="text-ink-600 dark:text-ink-300">Draft purchase orders</span>
                   <Badge>{data.kpis.draftPurchases}</Badge>
                 </li>
+                {can('report.stock') ? (
+                  <li className="flex items-center justify-between">
+                    <Link className="text-ink-600 hover:text-primary-600 dark:text-ink-300 dark:hover:text-primary-400" href="/reports/expiry">
+                      Stock expiring ≤ 30 days
+                    </Link>
+                    <Badge tone={data.kpis.expiringSoon ? 'warn' : 'green'}>{data.kpis.expiringSoon}</Badge>
+                  </li>
+                ) : null}
                 <li className="flex items-center justify-between">
                   <span className="text-ink-600 dark:text-ink-300">Locations in scope</span>
                   <Badge>{data.locations.length}</Badge>

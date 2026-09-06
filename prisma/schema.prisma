@@ -307,7 +307,7 @@ model Purchase {
   // Must be a location with canReceivePurchase = true (validated in code)
   locationId String
   location   Location @relation(fields: [locationId], references: [id])
-  status     String   @default("draft") // draft | confirmed | cancelled
+  status     String   @default("draft") // draft | confirmed | received | cancelled
   orderDate  DateTime @default(now())
   expectedDate DateTime?
   effectiveDate    DateTime @default(now())
@@ -343,7 +343,10 @@ model PurchaseLine {
   receivedQty   Int      @default(0)
   unitCost      Float
   lineTotal     Float
-  batch         Batch?
+  // Expiry of the lot being ordered. Carried onto each batch when the goods
+  // are physically received, so FIFO outflow can respect best-before dates.
+  expiresAt     DateTime?
+  batches       Batch[]
 
   @@index([purchaseId])
   @@index([variantId])
@@ -371,7 +374,7 @@ model Batch {
   // A batch created by a transfer keeps the origin batch's cost + date so FIFO
   // ordering survives the move.
   sourceBatchId String?
-  purchaseLineId String? @unique
+  purchaseLineId String?
   purchaseLine  PurchaseLine? @relation(fields: [purchaseLineId], references: [id], onDelete: SetNull)
   createdAt    DateTime @default(now())
 

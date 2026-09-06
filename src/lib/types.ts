@@ -68,7 +68,7 @@ export const ADJUSTMENT_REASON_LABELS: Record<AdjustmentReason, string> = {
   count_correction: 'Count Correction',
 };
 
-export const PURCHASE_STATUSES = ['draft', 'confirmed', 'cancelled'] as const;
+export const PURCHASE_STATUSES = ['draft', 'confirmed', 'received', 'cancelled'] as const;
 export type PurchaseStatus = (typeof PURCHASE_STATUSES)[number];
 
 export const TRANSFER_STATUSES = ['pending', 'in_transit', 'completed', 'cancelled'] as const;

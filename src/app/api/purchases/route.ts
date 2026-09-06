@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { audit } from '@/lib/audit';
 import { prisma } from '@/lib/db';
 import { assertLocationAccess, badRequest, guard, jsonError, scopedLocationIds } from '@/lib/rbac';
-import { confirmPurchase } from '@/lib/purchase-service';
+import { approvePurchase } from '@/lib/purchase-service';
 import { round2, withRetryNumber } from '@/lib/utils';
 
 const lineSchema = z.object({
@@ -51,7 +51,7 @@ export async function GET(request: Request) {
         location: true,
         createdBy: { select: { id: true, name: true } },
         approvedBy: { select: { id: true, name: true } },
-        lines: { include: { variant: { include: { product: true } }, batch: true } },
+        lines: { include: { variant: { include: { product: true } }, batches: true } },
       },
       orderBy: { createdAt: 'desc' },
       take: 200,
@@ -67,8 +67,8 @@ export async function GET(request: Request) {
  * Create a purchase order against a receiving location — any warehouse or
  * retail store with the “can receive purchases” flag (stores have it on by
  * default, so stock can be ordered straight into the shop).
- * `confirmImmediately` also runs the goods-receipt step (batch creation +
- * purchase_in ledger rows).
+ * `confirmImmediately` approves the order (draft → confirmed) without touching
+ * stock; the goods are received separately, per line, as they arrive.
  */
 export async function POST(request: Request) {
   try {
@@ -123,6 +123,7 @@ export async function POST(request: Request) {
               quantity: l.quantity,
               unitCost: l.unitCost,
               lineTotal: round2(l.quantity * l.unitCost),
+              expiresAt: l.expiresAt ? new Date(l.expiresAt) : null,
             })),
           },
         },
@@ -147,8 +148,8 @@ export async function POST(request: Request) {
 
     if (!data.confirmImmediately) return NextResponse.json({ purchase }, { status: 201 });
 
-    const confirmed = await confirmPurchase(purchase.id, ctx);
-    return NextResponse.json({ purchase: confirmed }, { status: 201 });
+    const approved = await approvePurchase(purchase.id, ctx);
+    return NextResponse.json({ purchase: approved }, { status: 201 });
   } catch (err) {
     return jsonError(err);
   }

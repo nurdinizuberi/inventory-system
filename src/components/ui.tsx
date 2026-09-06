@@ -77,6 +77,7 @@ export function statusTone(status: string): keyof typeof BADGE_TONES {
   const map: Record<string, keyof typeof BADGE_TONES> = {
     confirmed: 'green',
     completed: 'green',
+    received: 'green',
     approved: 'green',
     active: 'green',
     draft: 'neutral',

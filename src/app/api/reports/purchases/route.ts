@@ -18,7 +18,7 @@ export async function GET(request: Request) {
     const purchases = await prisma.purchase.findMany({
       where: {
         ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}),
-        status: 'confirmed',
+        status: { in: ['confirmed', 'received'] },
         orderDate: { gte: from, lte: to },
         ...(supplierId ? { supplierId } : {}),
         ...(scope ? { locationId: { in: scope } } : {}),
@@ -27,7 +27,7 @@ export async function GET(request: Request) {
       include: {
         supplier: true,
         location: true,
-        lines: { include: { variant: { include: { product: true } }, batch: true } },
+        lines: { include: { variant: { include: { product: true } }, batches: true } },
       },
       orderBy: { orderDate: 'desc' },
     });
@@ -79,7 +79,7 @@ export async function GET(request: Request) {
           quantity: l.quantity,
           unitCost: l.unitCost,
           lineTotal: l.lineTotal,
-          batch: l.batch?.code ?? null,
+          batch: l.batches.map((b) => b.code).join(', ') || null,
         })),
       })),
       bySupplier: [...bySupplier.values()].sort((a, b) => b.value - a.value),

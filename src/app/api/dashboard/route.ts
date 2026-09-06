@@ -24,7 +24,7 @@ export async function GET() {
     const effective = scope ?? (ctx.tenantId ? locationIds : null);
     const inEffective = effective ? { locationId: { in: effective } } : {};
 
-    const [salesToday, sales7, pendingAdjustments, inTransit, drafts] = await Promise.all([
+    const [salesToday, sales7, pendingAdjustments, inTransit, drafts, expiringSoon] = await Promise.all([
       prisma.sale.aggregate({
         where: { status: 'completed', soldAt: { gte: todayStart() }, ...inEffective },
         _sum: { total: true, profit: true, totalCost: true },
@@ -44,6 +44,14 @@ export async function GET() {
         },
       }),
       prisma.purchase.count({ where: { status: 'draft', ...inEffective } }),
+      prisma.batch.count({
+        where: {
+          remainingQty: { gt: 0 },
+          expiresAt: { not: null, lte: daysAgo(-30) },
+          ...inEffective,
+          ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}),
+        },
+      }),
     ]);
 
     const stock = await getStockMatrix(prisma, { locationIds });
@@ -116,6 +124,7 @@ export async function GET() {
         pendingAdjustments,
         inTransit,
         draftPurchases: drafts,
+        expiringSoon: expiringSoon,
       },
       sparkline: days,
       lowStock,

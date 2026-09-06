@@ -3,14 +3,16 @@ import { z } from 'zod';
 import { audit } from '@/lib/audit';
 import { TX_OPTIONS, prisma } from '@/lib/db';
 import { badRequest, guard, jsonError } from '@/lib/rbac';
-import { confirmPurchase } from '@/lib/purchase-service';
-import { recordMovement } from '@/lib/stock';
+import { approvePurchase, receivePurchaseLines } from '@/lib/purchase-service';
 
 type Params = { params: Promise<{ id: string }> };
 
 const actionSchema = z.object({
-  action: z.enum(['confirm', 'cancel']),
+  action: z.enum(['confirm', 'receive', 'cancel']),
   reason: z.string().optional(),
+  lines: z
+    .array(z.object({ lineId: z.string().min(1), quantity: z.coerce.number().int().positive() }))
+    .optional(),
 });
 
 export async function GET(_request: Request, { params }: Params) {
@@ -27,7 +29,7 @@ export async function GET(_request: Request, { params }: Params) {
         lines: {
           include: {
             variant: { include: { product: true } },
-            batch: { include: { location: true } },
+            batches: { include: { location: true } },
           },
         },
       },
@@ -56,14 +58,22 @@ export async function PATCH(request: Request, { params }: Params) {
       const ctx = await guard({ action: 'purchase.confirm' });
       const purchase = await prisma.purchase.findFirst({ where: { id, ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}) }, include: { lines: true, location: true } });
       if (!purchase) return NextResponse.json({ error: 'Purchase not found' }, { status: 404 });
-      const updated = await confirmPurchase(id, ctx);
+      const updated = await approvePurchase(id, ctx);
+      return NextResponse.json({ purchase: updated });
+    }
+
+    if (parsed.data.action === 'receive') {
+      const ctx = await guard({ action: 'purchase.confirm' });
+      const purchase = await prisma.purchase.findFirst({ where: { id, ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}) }, include: { lines: true, location: true } });
+      if (!purchase) return NextResponse.json({ error: 'Purchase not found' }, { status: 404 });
+      const updated = await receivePurchaseLines(id, ctx, parsed.data.lines ?? []);
       return NextResponse.json({ purchase: updated });
     }
 
     const ctx = await guard({ action: 'purchase.cancel' });
     const purchase = await prisma.purchase.findFirst({ where: { id, ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}) }, include: { lines: true, location: true } });
     if (!purchase) return NextResponse.json({ error: 'Purchase not found' }, { status: 404 });
-    const { updated, previous, supplier, location } = await cancelPurchase(id, ctx, parsed.data.reason);
+    const { updated, previous, received, supplier, location } = await cancelPurchase(id, ctx, parsed.data.reason);
     await audit({
       ctx,
       action: 'cancel',
@@ -81,9 +91,10 @@ export async function PATCH(request: Request, { params }: Params) {
 }
 
 /**
- * Cancel. A draft simply closes. A confirmed receipt is reversed with explicit
- * negative adjustment rows (never by deleting the ledger), and only if the
- * stock is still physically there.
+ * Cancel. A draft — or a confirmed order that never had goods received — simply
+ * closes. Once any stock has been received the order is left alone and the
+ * received goods must be written off or returned through the normal flows
+ * (returns / adjustments): there is no "undo" for goods already in the ledger.
  */
 async function cancelPurchase(
   purchaseId: string,
@@ -93,46 +104,16 @@ async function cancelPurchase(
   return prisma.$transaction(async (tx) => {
     const purchase = await tx.purchase.findFirst({
       where: { id: purchaseId, ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}) },
-      include: { lines: { include: { batch: true, variant: { include: { product: true } } } }, supplier: true, location: true },
+      include: { lines: { include: { variant: { include: { product: true } } } }, supplier: true, location: true },
     });
     if (!purchase) throw new Error('Purchase not found');
     if (purchase.status === 'cancelled') throw new Error('Purchase is already cancelled');
 
-    if (purchase.status === 'confirmed') {
-      for (const line of purchase.lines) {
-        if (!line.batch) continue;
-        if (line.batch.remainingQty < line.quantity) {
-          throw new Error(
-            `Cannot cancel: ${line.quantity - line.batch.remainingQty} unit(s) of ${line.variant.product.name} (${line.variant.label}) ` +
-              `from batch ${line.batch.code} have already been moved or sold.`,
-          );
-        }
-      }
-      for (const line of purchase.lines) {
-        if (!line.batch) continue;
-        await tx.batch.update({
-          where: { id: line.batch.id },
-          data: { remainingQty: { decrement: line.quantity } },
-        });
-        await recordMovement(tx, {
-          type: 'adjustment',
-          tenantId: ctx.tenantId ?? null,
-          variantId: line.variantId,
-          locationId: purchase.locationId,
-          quantity: -line.quantity,
-          batchId: line.batch.id,
-          status: 'available',
-          adjustmentReason: 'count_correction',
-          unitCost: line.unitCost,
-          totalCost: -line.lineTotal,
-          approvedById: ctx.id,
-          referenceType: 'Purchase',
-          referenceId: purchase.id,
-          referenceLabel: purchase.number,
-          createdById: ctx.id,
-          notes: `Purchase ${purchase.number} cancelled — receipt reversed${reason ? ` (${reason})` : ''}`,
-        });
-      }
+    const received = purchase.lines.reduce((sum, l) => sum + l.receivedQty, 0);
+    if (received > 0) {
+      throw new Error(
+        `Cannot cancel ${purchase.number}: ${received} unit(s) have already been received. Write off or return the received goods instead.`,
+      );
     }
 
     const updated = await tx.purchase.update({
@@ -141,6 +122,6 @@ async function cancelPurchase(
       include: { lines: true, supplier: true, location: true },
     });
 
-    return { updated, previous: purchase.status, supplier: purchase.supplier.name, location: purchase.location.name };
+    return { updated, previous: purchase.status, received, supplier: purchase.supplier.name, location: purchase.location.name };
   }, TX_OPTIONS);
 }
