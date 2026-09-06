@@ -89,6 +89,16 @@ export async function withRetryNumber<T>(
   throw lastErr;
 }
 
+/** Escape HTML-special characters before inlining data into a print popup. */
+export function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 export function todayStart(d: Date = new Date()): Date {
   const x = new Date(d);
   x.setHours(0, 0, 0, 0);

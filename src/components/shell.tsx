@@ -24,6 +24,7 @@ const NAV: NavItem[] = [
   { href: '/transfers', label: 'Transfers', permission: 'transfer.view', group: 'Move stock' },
   { href: '/stock', label: 'Stock ledger', permission: 'stock.view', group: 'Move stock' },
   { href: '/adjustments', label: 'Adjustments', permission: 'stock.view', group: 'Move stock' },
+  { href: '/reservations', label: 'Reservations', permission: 'reservation.manage', group: 'Move stock' },
   { href: '/products', label: 'Products & variants', permission: 'product.view', group: 'Catalogue' },
   { href: '/locations', label: 'Locations', permission: 'location.view', group: 'Catalogue' },
   { href: '/suppliers', label: 'Suppliers', permission: 'supplier.view', group: 'Catalogue' },

@@ -7,7 +7,7 @@ import { useAuth } from '@/components/auth-context';
 import { useToast } from '@/components/toast';
 import { api, errorMessage } from '@/lib/client';
 import { PRODUCT_EDIT_REASON_LABELS, PRODUCT_EDIT_REASONS, type ProductEditReason } from '@/lib/types';
-import { currency } from '@/lib/utils';
+import { currency, escapeHtml } from '@/lib/utils';
 
 interface Variant {
   id: string;
@@ -652,6 +652,39 @@ export default function ProductsPage() {
     return min === max ? currency(min) : `${currency(min)} – ${currency(max)}`;
   };
 
+  // Barcode label printing: opens a print-only popup window so the main page is
+  // never affected by the print stylesheet.
+  const printLabels = (items: { productName: string; variantLabel: string; sku: string; barcode: string }[]) => {
+    const w = window.open('', '_blank', 'width=420,height=640');
+    if (!w) {
+      toast.push('error', 'Pop-up blocked — allow pop-ups to print labels.');
+      return;
+    }
+    w.document.write(`<!doctype html><html><head><title>Product labels</title>
+<style>
+  body { font-family: Arial, Helvetica, sans-serif; background: #fff; color: #000; padding: 24px; }
+  .label { border: 2px solid #000; border-radius: 8px; padding: 14px 16px; margin: 0 0 16px; width: 248px; page-break-inside: avoid; }
+  .product { font-size: 13px; font-weight: 700; }
+  .variant { font-size: 12px; color: #444; margin-top: 2px; }
+  .barcode { font-family: 'OCRB', 'Courier New', monospace; font-size: 15px; letter-spacing: 3px; text-align: center; margin: 12px 0 4px; }
+  .sku { font-size: 10px; color: #666; text-align: center; }
+</style></head><body>
+  ${items
+    .map(
+      (item) => `<div class="label">
+        <div class="product">${escapeHtml(item.productName)}</div>
+        <div class="variant">${escapeHtml(item.variantLabel)}</div>
+        <div class="barcode">${escapeHtml(item.barcode)}</div>
+        <div class="sku">${escapeHtml(item.sku)}</div>
+      </div>`,
+    )
+    .join('')}
+</body></html>`);
+    w.document.close();
+    w.focus();
+    w.print();
+  };
+
   return (
     <Shell>
       <PageHeader
@@ -795,6 +828,7 @@ export default function ProductsPage() {
                                     <th className="text-right">Price</th>
                                     <th className="text-right">Low at</th>
                                     <th className="text-right">On hand</th>
+                                    <th />
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -819,6 +853,40 @@ export default function ProductsPage() {
                                           <Badge tone={variant.onHand && variant.onHand > 0 ? 'green' : 'neutral'}>{variant.onHand ?? 0}</Badge>
                                           {variant.reserved ? <span className="ml-1 text-xs text-ink-400">res {variant.reserved}</span> : null}
                                         </span>
+                                      </td>
+                                      <td className="text-right whitespace-nowrap">
+                                        <button
+                                          className="btn-ghost btn-sm"
+                                          onClick={() =>
+                                            printLabels([
+                                              {
+                                                productName: product.name,
+                                                variantLabel: variant.label,
+                                                sku: variant.sku,
+                                                barcode: variant.barcode,
+                                              },
+                                            ])
+                                          }
+                                          type="button"
+                                        >
+                                          Label
+                                        </button>
+                                        {product.variants.length > 1 && (
+                                          <button
+                                            className="btn-ghost btn-sm"
+                                            onClick={() =>
+                                              printLabels(product.variants.map((v) => ({
+                                                productName: product.name,
+                                                variantLabel: v.label,
+                                                sku: v.sku,
+                                                barcode: v.barcode,
+                                              })))
+                                            }
+                                            type="button"
+                                          >
+                                            All
+                                          </button>
+                                        )}
                                       </td>
                                     </tr>
                                   ))}

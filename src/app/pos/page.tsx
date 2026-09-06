@@ -53,6 +53,8 @@ interface Receipt {
   }[];
 }
 
+const cartStorageKey = (loc: string) => `pos-cart-${loc}`;
+
 export default function PosPage() {
   const { user } = useAuth();
   const toast = useToast();
@@ -60,6 +62,9 @@ export default function PosPage() {
   const [variants, setVariants] = useState<PosVariant[]>([]);
   const [query, setQuery] = useState('');
   const [cart, setCart] = useState<CartLine[]>([]);
+  const [savedCart, setSavedCart] = useState<CartLine[] | null>(null);
+  const [keypadVariantId, setKeypadVariantId] = useState<string | null>(null);
+  const [keypadDraft, setKeypadDraft] = useState('');
   const [loading, setLoading] = useState(false);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState('cash');
@@ -108,6 +113,42 @@ export default function PosPage() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  // Hold / resume a ticket per location. The cart is persisted locally as it
+  // changes, and a held ticket offers to resume on the next visit.
+  useEffect(() => {
+    if (!locationId) {
+      setSavedCart(null);
+      return;
+    }
+    try {
+      const raw = localStorage.getItem(cartStorageKey(locationId));
+      setSavedCart(raw ? (JSON.parse(raw) as CartLine[]) : null);
+    } catch {
+      setSavedCart(null);
+    }
+  }, [locationId]);
+
+  useEffect(() => {
+    if (!locationId || cart.length === 0) return;
+    localStorage.setItem(cartStorageKey(locationId), JSON.stringify(cart));
+  }, [cart, locationId]);
+
+  const clearSavedCart = () => {
+    if (locationId) localStorage.removeItem(cartStorageKey(locationId));
+    setSavedCart(null);
+  };
+
+  const resumeSavedCart = () => {
+    if (!savedCart) return;
+    setCart(savedCart);
+    clearSavedCart();
+  };
+
+  const clearCart = () => {
+    setCart([]);
+    clearSavedCart();
+  };
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -162,6 +203,19 @@ export default function PosPage() {
     );
   };
 
+  const openKeypad = (variantId: string, quantity: number) => {
+    setKeypadVariantId(variantId);
+    setKeypadDraft(String(quantity));
+  };
+
+  const applyKeypad = () => {
+    if (!keypadVariantId) return;
+    setQuantity(keypadVariantId, Number(keypadDraft) || 0);
+    setKeypadVariantId(null);
+  };
+
+  const keypadLine = cart.find((line) => line.variant.id === keypadVariantId);
+
   const { subtotal, discountTotal, total, units } = useMemo(() => {
   const sub = cart.reduce((sum, line) => sum + line.variant.sellingPrice * line.quantity, 0);
   const disc = cart.reduce((sum, line) => sum + line.unitDiscount * line.quantity, 0);
@@ -206,6 +260,7 @@ const paid = Number(amountPaid || 0);
       });
       setReceipt(result.sale);
       setCart([]);
+      clearSavedCart();
       setAmountPaid('');
       setCustomerName('');
       setCheckoutOpen(false);
@@ -296,11 +351,28 @@ const paid = Number(amountPaid || 0);
           <header className="flex items-center justify-between border-b border-ink-200 px-4 py-3 dark:border-ink-700">
             <h2 className="section-title">Current ticket</h2>
             {cart.length > 0 && (
-              <button className="btn-ghost btn-sm" onClick={() => setCart([])} type="button">
+              <button className="btn-ghost btn-sm" onClick={clearCart} type="button">
                 Clear
               </button>
             )}
           </header>
+
+          {savedCart && savedCart.length > 0 && cart.length === 0 && (
+            <div className="space-y-2 border-b border-amber-500/30 bg-amber-50 px-4 py-3 dark:bg-amber-500/10">
+              <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
+                Held ticket from earlier — {savedCart.reduce((sum, line) => sum + line.quantity, 0)} units,&nbsp;
+                {currency(savedCart.reduce((sum, line) => sum + (line.variant.sellingPrice - line.unitDiscount) * line.quantity, 0))}
+              </p>
+              <div className="flex gap-2">
+                <button className="btn-primary btn-sm" onClick={resumeSavedCart} type="button">
+                  Resume
+                </button>
+                <button className="btn-ghost btn-sm" onClick={clearSavedCart} type="button">
+                  Discard
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="max-h-[45vh] overflow-y-auto px-4 py-3">
             {cart.length === 0 && <p className="muted py-6 text-center">Tap a product to add it.</p>}
@@ -318,27 +390,14 @@ const paid = Number(amountPaid || 0);
                     </button>
                   </div>
                   <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <div className="flex items-center rounded-lg border border-ink-300 dark:border-ink-600">
-                      <button
-                        className="px-2 py-1 text-ink-600 hover:bg-ink-100 dark:text-ink-300 dark:hover:bg-ink-700"
-                        onClick={() => setQuantity(line.variant.id, line.quantity - 1)}
-                        type="button"
-                      >
-                        −
-                      </button>
-                      <input
-                        className="w-12 border-x border-ink-200 py-1 text-center text-sm tabular-nums dark:border-ink-700"
-                        value={line.quantity}
-                        onChange={(e) => setQuantity(line.variant.id, Number(e.target.value) || 0)}
-                      />
-                      <button
-                        className="px-2 py-1 text-ink-600 hover:bg-ink-100 dark:text-ink-300 dark:hover:bg-ink-700"
-                        onClick={() => setQuantity(line.variant.id, line.quantity + 1)}
-                        type="button"
-                      >
-                        +
-                      </button>
-                    </div>
+                    <button
+                      className="flex items-center gap-2 rounded-lg border border-ink-300 px-3 py-1.5 text-sm font-semibold tabular-nums hover:bg-ink-100 dark:border-ink-600 dark:hover:bg-ink-700"
+                      onClick={() => openKeypad(line.variant.id, line.quantity)}
+                      type="button"
+                    >
+                      <span className="text-xs font-normal text-ink-500 dark:text-ink-400">Qty</span>
+                      {line.quantity}
+                    </button>
                     <label className="flex items-center gap-1 text-xs text-ink-500 dark:text-ink-400">
                       disc/unit
                       <input
@@ -347,6 +406,7 @@ const paid = Number(amountPaid || 0);
                         onChange={(e) => setDiscount(line.variant.id, Number(e.target.value) || 0)}
                       />
                     </label>
+                    <span className="ml-auto text-xs text-ink-400 dark:text-ink-500">{line.variant.sellable} sellable</span>
                   </div>
                   <div className="mt-2 flex items-center justify-between text-sm">
                     <span className="text-ink-500 dark:text-ink-400">
@@ -535,6 +595,58 @@ const paid = Number(amountPaid || 0);
             </div>
           </div>
         )}
+      </Modal>
+
+      <Modal
+        open={Boolean(keypadVariantId)}
+        title="Set quantity"
+        onClose={() => setKeypadVariantId(null)}
+        footer={
+          <>
+            <button className="btn-secondary" onClick={() => setKeypadVariantId(null)} type="button">
+              Cancel
+            </button>
+            <button className="btn-primary" onClick={applyKeypad} type="button">
+              Apply ({keypadDraft || 0})
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-medium">{keypadLine?.variant.displayName}</p>
+            {keypadLine && (
+              <span className="text-xs text-ink-500 dark:text-ink-400">
+                up to {keypadLine.variant.sellable} available
+              </span>
+            )}
+          </div>
+          <div className="text-center text-4xl font-bold tabular-nums text-ink-900 dark:text-ink-100">
+            {keypadDraft || '0'}
+          </div>
+          <div className="mx-auto grid max-w-[16rem] grid-cols-3 gap-2">
+            {['1', '2', '3', '4', '5', '6', '7', '8', '9', '⌫', '0', 'C'].map((key) => (
+              <button
+                key={key}
+                className="rounded-lg border border-ink-300 py-3 text-lg font-medium hover:bg-ink-100 dark:border-ink-600 dark:hover:bg-ink-700"
+                onClick={() =>
+                  setKeypadDraft((draft) => {
+                    if (key === '⌫') return draft.slice(0, -1);
+                    if (key === 'C') return '';
+                    if (draft.length >= 4) return draft;
+                    return draft === '0' ? key : draft + key;
+                  })
+                }
+                type="button"
+              >
+                {key}
+              </button>
+            ))}
+          </div>
+          <p className="text-center text-xs text-ink-500 dark:text-ink-400">
+            Entering 0 removes the line from the ticket.
+          </p>
+        </div>
       </Modal>
 
       <BackdateDialog

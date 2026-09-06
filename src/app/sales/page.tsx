@@ -7,7 +7,7 @@ import { Badge, Card, Empty, Modal, TableWrap, statusTone } from '@/components/u
 import { useAuth } from '@/components/auth-context';
 import { useToast } from '@/components/toast';
 import { api, errorMessage } from '@/lib/client';
-import { currency, formatDate } from '@/lib/utils';
+import { currency, escapeHtml, formatDate } from '@/lib/utils';
 
 interface Sale {
   id: string;
@@ -63,6 +63,51 @@ export default function SalesPage() {
     } catch (err) {
       toast.push('error', errorMessage(err));
     }
+  };
+
+  // Reprint a completed ticket as a 80 mm-style receipt in a print-only popup.
+  const printReceipt = (sale: Sale) => {
+    const w = window.open('', '_blank', 'width=320,height=640');
+    if (!w) {
+      toast.push('error', 'Pop-up blocked — allow pop-ups to reprint receipts.');
+      return;
+    }
+    const rows = sale.lines
+      .map(
+        (line) => `<tr><td style="padding:2px 0;">
+          ${escapeHtml(line.variant.product.name)} — ${escapeHtml(line.variant.label)}
+          <div style="color:#666;font-size:10px;">${line.quantity} × ${currency(line.actualPrice)}</div>
+        </td><td style="text-align:right;padding:2px 0;white-space:nowrap;">${currency(line.lineTotal)}</td></tr>`,
+      )
+      .join('');
+    w.document.write(`<!doctype html><html><head><title>Receipt ${sale.number}</title>
+<style>
+  body { font-family: 'Courier New', monospace; font-size: 12px; color: #000; width: 280px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 13px; text-align: center; margin: 0 0 2px; }
+  .meta { text-align: center; color: #444; line-height: 1.4; margin-bottom: 8px; }
+  .rule { border-top: 1px dashed #000; margin: 6px 0; }
+  table { width: 100%; border-collapse: collapse; }
+  td { vertical-align: top; }
+  .total td { font-weight: 700; }
+  .foot { margin-top: 10px; color: #444; line-height: 1.5; }
+</style></head><body>
+  <h1>${escapeHtml(sale.location.name)}</h1>
+  <div class="meta">${escapeHtml(sale.number)}<br>${formatDate(sale.soldAt, true)}</div>
+  <div class="rule"></div>
+  <table>${rows}</table>
+  <div class="rule"></div>
+  <table class="total">
+    <tr><td>Total</td><td style="text-align:right">${currency(sale.total)}</td></tr>
+    <tr><td>Payment</td><td style="text-align:right">${sale.paymentMethod.replace('_', ' ')}</td></tr>
+  </table>
+  <div class="foot">
+    Cashier: ${escapeHtml(sale.cashier.name)}<br>
+    ${sale.customerName ? `Customer: ${escapeHtml(sale.customerName)}<br>` : ''}
+  </div>
+</body></html>`);
+    w.document.close();
+    w.focus();
+    w.print();
   };
 
   return (
@@ -155,10 +200,17 @@ export default function SalesPage() {
         wide
         onClose={() => setDetail(null)}
         footer={
-          detail?.status === 'completed' && can('sale.void') ? (
-            <button className="btn-danger" onClick={() => voidSale(detail.id)} type="button">
-              Void sale
-            </button>
+          detail ? (
+            <div className="flex w-full items-center justify-between gap-3">
+              <button className="btn-secondary" onClick={() => printReceipt(detail)} type="button">
+                Reprint receipt
+              </button>
+              {detail.status === 'completed' && can('sale.void') ? (
+                <button className="btn-danger" onClick={() => voidSale(detail.id)} type="button">
+                  Void sale
+                </button>
+              ) : undefined}
+            </div>
           ) : undefined
         }
       >
