@@ -26,7 +26,16 @@ export function resolveBackdate(
     return { effectiveDate: now, backdateReason: null, isBackdated: false, error: 'Invalid effective date' };
   }
 
-  const isBackdated = date < now;
+  // Compare at day granularity: a date is only backdated when it is a strictly
+  // earlier calendar day than today — a YYYY-MM-DD date input like "today"
+  // parses to midnight UTC, which must not read as "this morning already
+  // passed". This matches the UI's isBackdated() and recordMovement().
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  const effective = new Date(date);
+  effective.setHours(0, 0, 0, 0);
+  const isBackdated = effective < today;
+
   if (isBackdated && !backdateReason) {
     return {
       effectiveDate: date,

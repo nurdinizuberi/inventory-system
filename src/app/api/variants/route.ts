@@ -74,7 +74,13 @@ export async function GET(request: Request) {
       stockByVariant.set(row.variantId, list);
     }
 
-    const items = variants.map((v) => {
+    // A till should only offer what the selected store actually carries. When a
+    // location is given, drop variants that have never been stocked there, so a
+    // store-scoped cashier no longer browses the warehouse's (or another
+    // store's) catalog as a wall of "out of stock" cards.
+    const scoped = locationId ? variants.filter((v) => stockByVariant.has(v.id)) : variants;
+
+    const items = scoped.map((v) => {
       const attributes = JSON.parse(v.attributes || '{}') as Record<string, string>;
       const attrText = Object.values(attributes).filter(Boolean).join(' / ');
       const rows = stockByVariant.get(v.id) ?? [];
