@@ -51,10 +51,16 @@ export async function GET(request: Request) {
         ...(q
           ? {
               OR: [
-                { sku: { contains: q } },
-                { barcode: { contains: q } },
-                { label: { contains: q } },
-                { product: { name: { contains: q } } },
+                // Postgres `contains` is case-sensitive (LIKE, not ILIKE), so a
+                // lowercase search term would miss "Laptop" / "Rice 5kg".
+                { sku: { contains: q, mode: 'insensitive' } },
+                { barcode: { contains: q, mode: 'insensitive' } },
+                { label: { contains: q, mode: 'insensitive' } },
+                { product: { name: { contains: q, mode: 'insensitive' } } },
+                // Search the serialized attribute map too (e.g. "Red", "42") so
+                // a variant is findable by the same text the POS card displays.
+                { attributes: { contains: q, mode: 'insensitive' } },
+                { product: { category: { name: { contains: q, mode: 'insensitive' } } } },
               ],
             }
           : {}),
@@ -87,7 +93,14 @@ export async function GET(request: Request) {
     // store's) catalog as a wall of "out of stock" cards. In POS mode a variant
     // that has NEVER been stocked anywhere is kept: it was just created in the
     // product section and has no home yet, so it must still be searchable.
-    const scoped = locationId
+    // While the cashier is just browsing (no query) the till stays scoped to
+    // what the selected store actually carries — a store cashier no longer sees
+    // the warehouse's/other stores' catalog as a wall of "out of stock" cards.
+    // Once they type a search, that scoping is lifted (POS mode only) so ANY
+    // active product is findable: a product stocked at the warehouse or another
+    // store shows up as out of stock here instead of silently missing from
+    // search. Other callers (transfers, reservations) keep their scoped browse.
+    const scoped = locationId && !(pos && q)
       ? variants.filter((v) => {
           const rows = stockByVariant.get(v.id) ?? [];
           const hasHere = rows.some((row) => row.locationId === locationId);

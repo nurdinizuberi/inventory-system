@@ -18,6 +18,7 @@ interface PosVariant {
   displayName: string;
   sku: string;
   barcode: string;
+  attributes: Record<string, string>;
   sellingPrice: number;
   costPrice: number;
   sellable: number;
@@ -62,6 +63,7 @@ export default function PosPage() {
   const [locationId, setLocationId] = useState('');
   const [variants, setVariants] = useState<PosVariant[]>([]);
   const [query, setQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [cart, setCart] = useState<CartLine[]>([]);
   const [savedCart, setSavedCart] = useState<CartLine[] | null>(null);
   const [keypadVariantId, setKeypadVariantId] = useState<string | null>(null);
@@ -91,8 +93,13 @@ export default function PosPage() {
     if (!locationId) return;
     setLoading(true);
     try {
+      const q = debouncedQuery.trim();
+      // The server searches the WHOLE active catalogue when q is present, so a
+      // product stocked at the warehouse or another store is still findable
+      // (it shows as out of stock here). The client re-filters the response so
+      // results also update instantly between keystrokes.
       const data = await api.get<{ variants: PosVariant[] }>(
-        `/api/variants?locationId=${locationId}&pos=1`,
+        `/api/variants?locationId=${locationId}&pos=1${q ? `&q=${encodeURIComponent(q)}` : ''}`,
       );
       setVariants(data.variants);
     } catch (err) {
@@ -100,7 +107,14 @@ export default function PosPage() {
     } finally {
       setLoading(false);
     }
-  }, [locationId, toast]);
+  }, [locationId, debouncedQuery, toast]);
+
+  // Send the search term to the server once the cashier pauses typing, so the
+  // catalogue query covers every active product, not just the store-scoped list.
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(query), 250);
+    return () => clearTimeout(timer);
+  }, [query]);
 
   useEffect(() => {
     void loadVariants();
@@ -156,11 +170,14 @@ export default function PosPage() {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return variants;
+    const attributeText = (v: PosVariant) => Object.values(v.attributes ?? {}).join(' ').toLowerCase();
     return variants.filter(
       (v) =>
         v.displayName.toLowerCase().includes(q) ||
+        v.label.toLowerCase().includes(q) ||
         v.sku.toLowerCase().includes(q) ||
         v.barcode.includes(q) ||
+        attributeText(v).includes(q) ||
         (v.category ?? '').toLowerCase().includes(q),
     );
   }, [variants, query]);
@@ -325,8 +342,11 @@ export default function PosPage() {
           </div>
 
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {loading && <p className="muted">Loading catalogue…</p>}
-            {!loading &&
+            {loading && variants.length === 0 && <p className="muted">Loading catalogue…</p>}
+            {!loading && filtered.length === 0 && (
+              <p className="muted">{query.trim() ? `No products match “${query.trim()}”.` : 'No products available at this store.'}</p>
+            )}
+            {(variants.length > 0 || !loading) &&
               filtered.slice(0, 60).map((variant) => {
                 const disabled = variant.sellable <= 0;
                 const inTicket = cartQty.get(variant.id) ?? 0;

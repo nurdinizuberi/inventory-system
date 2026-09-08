@@ -58,6 +58,8 @@ echo "== 3. LOCATION CAPABILITY + ASSIGNMENT CHECKS =="
 WH_ID=$(curl -s -b $ADMIN "$BASE/api/locations" | python3 -c 'import json,sys;print([l["id"] for l in json.load(sys.stdin)["locations"] if l["code"]=="WH-MAIN"][0])')
 MBEZI_ID=$(curl -s -b $ADMIN "$BASE/api/locations" | python3 -c 'import json,sys;print([l["id"] for l in json.load(sys.stdin)["locations"] if l["code"]=="ST-MBEZI"][0])')
 KAR_ID=$(curl -s -b $ADMIN "$BASE/api/locations" | python3 -c 'import json,sys;print([l["id"] for l in json.load(sys.stdin)["locations"] if l["code"]=="ST-KAR"][0])')
+# The write-off location is the one place that must never receive purchases.
+DAMAGED_ID=$(curl -s -b $ADMIN "$BASE/api/locations" | python3 -c 'import json,sys;print([l["id"] for l in json.load(sys.stdin)["locations"] if l["type"]=="DAMAGED"][0])')
 SUP_ID=$(curl -s -b $ADMIN "$BASE/api/suppliers" | python3 -c 'import json,sys;print(json.load(sys.stdin)["suppliers"][0]["id"])')
 VARIANT_JSON=$(curl -s -g -b $ADMIN "$BASE/api/variants?locationId=$WH_ID")
 V_ID=$(echo "$VARIANT_JSON" | python3 -c 'import json,sys;print([v for v in json.load(sys.stdin)["variants"] if v["productName"]=="Wireless Mouse" and v["label"]=="Grey"][0]["id"])')
@@ -65,8 +67,8 @@ echo "  using variant $V_ID (Wireless Mouse — Grey)"
 echo "  warehouse=$WH_ID mbezi=$MBEZI_ID kariakoo=$KAR_ID supplier=$SUP_ID"
 
 SUP_LINE="{\"variantId\":\"$V_ID\",\"quantity\":1,\"unitCost\":100}"
-expect_status "admin blocked by can_receive_purchase=false at a store" 422 POST /api/purchases \
-  "{\"supplierId\":\"$SUP_ID\",\"locationId\":\"$MBEZI_ID\",\"lines\":[$SUP_LINE]}" $ADMIN
+expect_status "admin blocked by can_receive_purchase=false (write-off location)" 422 POST /api/purchases \
+  "{\"supplierId\":\"$SUP_ID\",\"locationId\":\"$DAMAGED_ID\",\"lines\":[$SUP_LINE]}" $ADMIN
 expect_status "warehouse mgr blocked by location assignment first" 403 POST /api/purchases \
   "{\"supplierId\":\"$SUP_ID\",\"locationId\":\"$MBEZI_ID\",\"lines\":[$SUP_LINE]}" $WH
 expect_status "store mgr cannot ship FROM a store they do not own" 403 POST /api/transfers \
@@ -87,6 +89,11 @@ PO_CODE=$(curl -s -g -o /tmp/po.json -w '%{http_code}' -b $WH -H 'Content-Type: 
        \"lines\":[{\"variantId\":\"$V_ID\",\"quantity\":25,\"unitCost\":19000}]}" "$BASE/api/purchases")
 check "warehouse manager confirms a purchase" 201 "$PO_CODE"
 PO_ID=$(python3 -c 'import json;print(json.load(open("/tmp/po.json"))["purchase"]["id"])')
+
+# Confirming an order is an approval; the goods land only on receipt.
+LINE_ID=$(python3 -c 'import json;print(json.load(open("/tmp/po.json"))["purchase"]["lines"][0]["id"])')
+expect_status "goods received into the warehouse" 200 PATCH "/api/purchases/$PO_ID" \
+  "{\"action\":\"receive\",\"lines\":[{\"lineId\":\"$LINE_ID\",\"quantity\":25}]}" $WH
 
 AFTER=$(curl -s -b $ADMIN "$BASE/api/reports/stock?locationId=$WH_ID" | python3 -c "
 import json,sys
@@ -171,6 +178,22 @@ import json,sys
 rows=json.load(sys.stdin)['rows']
 print(next((r['onHand'] for r in rows if r['variantId']=='$V_ID'),0))")
 check "store stock fell by 3" "$((DEST-3))" "$AFTER_SALE"
+
+echo
+echo "== 6b. POS SEARCH — keyword search covers the whole catalogue =="
+# Browse stays scoped to the store, but a typed search must find ANY active
+# product (e.g. one stocked only at the warehouse) case-insensitively.
+BROWSE_NAMES=$(curl -s -g -b $CASH "$BASE/api/variants?locationId=$MBEZI_ID&pos=1" | python3 -c '
+import json,sys
+print(",".join(sorted(v["productName"] for v in json.load(sys.stdin)["variants"])))')
+check "browse stays store-scoped (warehouse-only Laptop hidden)" "0" "$(echo "$BROWSE_NAMES" | grep -c 'Laptop' || true)"
+SEARCH_LAPTOP=$(curl -s -g -b $CASH "$BASE/api/variants?locationId=$MBEZI_ID&pos=1&q=laptop")
+check "search finds warehouse-only product (case-insensitive)" "1" "$(echo "$SEARCH_LAPTOP" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["variants"]))')"
+check "search result is marked out of stock at this store" "0" "$(echo "$SEARCH_LAPTOP" | python3 -c 'import json,sys;print(json.load(sys.stdin)["variants"][0]["sellable"])')"
+SEARCH_UPPER=$(curl -s -g -b $CASH "$BASE/api/variants?locationId=$MBEZI_ID&pos=1&q=RICE")
+check "search matches product name regardless of case" "1" "$(echo "$SEARCH_UPPER" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["variants"]))')"
+SEARCH_SKU=$(curl -s -g -b $CASH "$BASE/api/variants?locationId=$MBEZI_ID&pos=1&q=cookin")
+check "search matches SKU fragment regardless of case" "1" "$(echo "$SEARCH_SKU" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["variants"]))')"
 
 echo
 echo "== 7. RETURNS — sellable restocks, damaged writes off =="
