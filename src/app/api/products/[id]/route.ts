@@ -30,12 +30,34 @@ export async function GET(_request: Request, { params }: Params) {
     });
     if (!product) return NextResponse.json({ error: 'Product not found' }, { status: 404 });
 
-    const matrix = await getStockMatrix(prisma, { variantIds: product.variants.map((v) => v.id) });
+    const variantIds = product.variants.map((v) => v.id);
+    const [matrix, allBatches] = await Promise.all([
+      getStockMatrix(prisma, { variantIds }),
+      variantIds.length
+        ? prisma.batch.findMany({
+            where: { variantId: { in: variantIds }, remainingQty: { gt: 0 } },
+            orderBy: [{ receivedAt: 'asc' }, { createdAt: 'asc' }],
+            include: { location: { select: { name: true } } },
+          })
+        : [],
+    ]);
     const stock = product.variants.map((v) => ({
       variantId: v.id,
       rows: matrix.filter((row) => row.variantId === v.id),
     }));
-    return NextResponse.json({ product, stock });
+    const batches = product.variants.map((v) => ({
+      variantId: v.id,
+      batches: allBatches
+        .filter((b) => b.variantId === v.id)
+        .map((b) => ({
+          code: b.code,
+          unitCost: b.unitCost,
+          remainingQty: b.remainingQty,
+          receivedAt: b.receivedAt.toISOString(),
+          locationName: b.location.name,
+        })),
+    }));
+    return NextResponse.json({ product, stock, batches });
   } catch (err) {
     return jsonError(err);
   }

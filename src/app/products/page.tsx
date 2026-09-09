@@ -9,6 +9,14 @@ import { api, errorMessage } from '@/lib/client';
 import { PRODUCT_EDIT_REASON_LABELS, PRODUCT_EDIT_REASONS, type ProductEditReason } from '@/lib/types';
 import { currency, escapeHtml } from '@/lib/utils';
 
+interface BatchInfo {
+  code: string;
+  unitCost: number;
+  remainingQty: number;
+  receivedAt: string;
+  locationName: string;
+}
+
 interface Variant {
   id: string;
   label: string;
@@ -121,6 +129,9 @@ export default function ProductsPage() {
   const [editReason, setEditReason] = useState<ProductEditReason | ''>('');
   const [editReasonOther, setEditReasonOther] = useState('');
   const origProductCost = useRef<number | null>(null);
+  const [editBatches, setEditBatches] = useState<Map<string, BatchInfo[]>>(new Map());
+  const [editBatchesLoading, setEditBatchesLoading] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
 
   // Category management
   const [catOpen, setCatOpen] = useState(false);
@@ -306,6 +317,7 @@ export default function ProductsPage() {
     setEditing(product);
     setEditReason('');
     setEditReasonOther('');
+    setShowConfirm(false);
     origProductCost.current = product.costPrice;
     const active = product.variants.filter((v) => v.isActive);
     const isSimple = active.length === 1 && active[0].isDefault && active[0].label === 'Standard';
@@ -349,6 +361,19 @@ export default function ProductsPage() {
         };
       }),
     );
+    // Fetch batch breakdown for each variant (async, non-blocking).
+    setEditBatchesLoading(true);
+    api
+      .get<{ batches: { variantId: string; batches: BatchInfo[] }[] }>(`/api/products/${product.id}`)
+      .then((data) => {
+        const map = new Map<string, BatchInfo[]>();
+        for (const entry of data.batches) {
+          map.set(entry.variantId, entry.batches);
+        }
+        setEditBatches(map);
+      })
+      .catch(() => {})
+      .finally(() => setEditBatchesLoading(false));
   };
 
   const saveEdit = async () => {
@@ -395,6 +420,11 @@ export default function ProductsPage() {
     }
     if (reasonRequired) {
       toast.push('error', 'A reason is required for cost or quantity changes.');
+      return;
+    }
+    // When stock-related fields changed, show a confirmation popup before saving.
+    if (hasStockChanges && !showConfirm) {
+      setShowConfirm(true);
       return;
     }
     setBusy(true);
@@ -458,6 +488,8 @@ export default function ProductsPage() {
       toast.push('success', 'Product updated.');
       setEditing(null);
       setEditReason('');
+      setShowConfirm(false);
+      setEditBatches(new Map());
       await load();
     } catch (err) {
       toast.push('error', errorMessage(err));
@@ -1148,7 +1180,7 @@ export default function ProductsPage() {
         open={!!editing}
         title="Edit product"
         wide
-        onClose={() => setEditing(null)}
+        onClose={() => { setEditing(null); setShowConfirm(false); setEditBatches(new Map()); }}
         footer={
           <>
             <button className="btn-secondary" onClick={() => setEditing(null)} type="button">
@@ -1182,7 +1214,7 @@ export default function ProductsPage() {
             </Field>
             {showProductPrices && (
               <>
-                <Field label="Default selling price">
+                <Field label="Default selling price" hint="Changes what customers pay. Future sales only.">
                   <input
                     className="input"
                     inputMode="decimal"
@@ -1195,7 +1227,7 @@ export default function ProductsPage() {
                     <p className="mt-1 text-xs text-red-500">Selling price must be greater than 0.</p>
                   )}
                 </Field>
-                <Field label="Default cost price">
+                <Field label="Default cost price" hint="New stock uses this cost. Old stock keeps old cost.">
                   <input
                     className="input"
                     inputMode="decimal"
@@ -1303,7 +1335,11 @@ export default function ProductsPage() {
                     <div className="grid grid-cols-3 gap-2">
                       <Field
                         label="Cost"
-                        hint={showProductPrices && v.isActive && !v.isNew ? 'Set on the product' : undefined}
+                        hint={
+                          showProductPrices && v.isActive && !v.isNew
+                            ? 'Set on the product'
+                            : 'New stock uses this cost. Old stock keeps old cost.'
+                        }
                       >
                         <input
                           className="input"
@@ -1320,7 +1356,11 @@ export default function ProductsPage() {
                       </Field>
                       <Field
                         label="Price"
-                        hint={showProductPrices && v.isActive && !v.isNew ? 'Set on the product' : undefined}
+                        hint={
+                          showProductPrices && v.isActive && !v.isNew
+                            ? 'Set on the product'
+                            : 'Changes what customers pay. Future sales only.'
+                        }
                       >
                         <input
                           className="input"
@@ -1351,7 +1391,11 @@ export default function ProductsPage() {
                       <div className="grid grid-cols-2 gap-2">
                         <Field
                           label={v.isNew ? 'Opening quantity' : 'Quantity change'}
-                          hint={!v.isNew ? `${v.onHand} on hand` : undefined}
+                          hint={
+                            v.isNew
+                              ? undefined
+                              : `${v.onHand} on hand — increase adds a batch, decrease removes oldest first (FIFO)`
+                          }
                         >
                           <div className="flex gap-2">
                             <input
@@ -1424,6 +1468,47 @@ export default function ProductsPage() {
                         )}
                       </div>
                     )}
+                    {/* Stock breakdown — read-only batch display */}
+                    {!v.isNew && v.onHand > 0 && (
+                      <div className="mt-2 rounded-lg border border-ink-100 bg-ink-50 p-2.5 dark:border-ink-700 dark:bg-ink-800/30">
+                        <p className="mb-1.5 text-xs font-medium text-ink-600 dark:text-ink-300">
+                          Stock breakdown
+                          {editBatchesLoading && <span className="ml-1 text-ink-400">loading…</span>}
+                        </p>
+                        {(() => {
+                          const batches = editBatches.get(v.id) ?? [];
+                          if (batches.length === 0 && !editBatchesLoading) {
+                            return <p className="text-xs text-ink-400">No active batches.</p>;
+                          }
+                          const totalQty = batches.reduce((s, b) => s + b.remainingQty, 0);
+                          const avgCost = totalQty > 0 ? batches.reduce((s, b) => s + b.unitCost * b.remainingQty, 0) / totalQty : 0;
+                          return (
+                            <>
+                              <div className="space-y-1">
+                                {batches.map((b) => (
+                                  <div key={b.code} className="flex items-center justify-between text-xs">
+                                    <span className="text-ink-500 dark:text-ink-400">
+                                      {b.code}: {b.remainingQty} unit(s) @ {currency(b.unitCost)}
+                                      <span className="ml-1 text-ink-400">
+                                        ({b.locationName}, {new Date(b.receivedAt).toLocaleDateString()})
+                                      </span>
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                              {batches.length > 0 && (
+                                <div className="mt-1.5 border-t border-ink-200 pt-1.5 dark:border-ink-700">
+                                  <p className="text-xs text-ink-500 dark:text-ink-400">
+                                    Total: {totalQty} unit(s) · Avg cost: {currency(avgCost)}
+                                  </p>
+                                  <p className="text-xs text-ink-400">Sells oldest first (FIFO)</p>
+                                </div>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1435,6 +1520,97 @@ export default function ProductsPage() {
           </div>
         </div>
       </Modal>
+
+      {/* Confirm stock changes modal */}
+      {editing && (
+        <Modal
+          open={showConfirm}
+          title="Confirm changes"
+          wide
+          onClose={() => setShowConfirm(false)}
+          footer={
+            <>
+              <button className="btn-secondary" onClick={() => setShowConfirm(false)} type="button">
+                Cancel
+              </button>
+              <button className="btn-primary" disabled={busy} onClick={() => void saveEdit()} type="button">
+                {busy ? 'Saving…' : 'Yes, save'}
+              </button>
+            </>
+          }
+        >
+          <div className="space-y-4">
+            <p className="text-sm text-ink-600 dark:text-ink-300">
+              You are about to save the following stock-related changes:
+            </p>
+            <div className="space-y-2">
+              {/* Product-level cost change */}
+              {showProductPrices && Number(editForm.costPrice) !== origProductCost.current && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-700 dark:bg-amber-900/20">
+                  <p className="text-xs font-medium text-amber-700 dark:text-amber-300">Cost price</p>
+                  <p className="text-sm">
+                    {currency(origProductCost.current ?? 0)} → {currency(Number(editForm.costPrice))}
+                    <span className="ml-2 text-xs text-amber-600 dark:text-amber-400">(revalues existing stock)</span>
+                  </p>
+                </div>
+              )}
+              {/* Product-level selling price change */}
+              {showProductPrices && Number(editForm.basePrice) !== (editing.variants[0]?.sellingPrice ?? editing.basePrice) && (
+                <div className="rounded-lg border border-ink-200 p-3 dark:border-ink-700">
+                  <p className="text-xs font-medium text-ink-500 dark:text-ink-400">Selling price</p>
+                  <p className="text-sm">
+                    {currency(editing.variants[0]?.sellingPrice ?? editing.basePrice)} → {currency(Number(editForm.basePrice))}
+                    <span className="ml-2 text-xs text-ink-400">(future sales only)</span>
+                  </p>
+                </div>
+              )}
+              {/* Per-variant changes */}
+              {editVariants.map((v) => {
+                if (v.isNew) return null;
+                const orig = editing.variants.find((ev) => ev.id === v.id);
+                if (!orig) return null;
+                const costChanged = editCostChanged(v);
+                const qtyDelta = editQtyNum(v);
+                const qtyChanged = editQtyChanged(v);
+                const origPrice = orig.sellingPrice ?? editing.basePrice;
+                const newPrice = Number(v.price || editForm.basePrice);
+                const priceChanged = Number(v.price) > 0 && newPrice !== origPrice;
+                if (!costChanged && !qtyChanged && !priceChanged) return null;
+                const location = locations.find((l) => l.id === v.locationId);
+                return (
+                  <div key={v.id} className="rounded-lg border border-ink-200 p-3 dark:border-ink-700">
+                    <p className="mb-2 text-xs font-medium text-ink-700 dark:text-ink-200">{v.label}</p>
+                    <div className="space-y-1 text-sm">
+                      {priceChanged && (
+                        <p>Selling price: {currency(origPrice)} → {currency(newPrice)} <span className="text-xs text-ink-400">(future sales only)</span></p>
+                      )}
+                      {costChanged && (
+                        <p>Cost: {currency(v.origCost ?? 0)} → {currency(Number(v.cost))} <span className="text-xs text-ink-400">(new stock only)</span></p>
+                      )}
+                      {qtyChanged && (
+                        <p>
+                          Quantity: {v.onHand} → {v.onHand + qtyDelta}
+                          {qtyDelta > 0 ? (
+                            <span className="ml-1 text-xs text-green-600 dark:text-green-400">(+{qtyDelta} new batch at {currency(Number(v.cost || editForm.costPrice))})</span>
+                          ) : (
+                            <span className="ml-1 text-xs text-amber-600 dark:text-amber-400">({qtyDelta} removed FIFO)</span>
+                          )}
+                        </p>
+                      )}
+                      {qtyChanged && location && (
+                        <p className="text-xs text-ink-400">Location: {location.name}</p>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {editReasonFinal && (
+              <p className="text-xs text-ink-500 dark:text-ink-400">Reason: {editReasonFinal}</p>
+            )}
+          </div>
+        </Modal>
+      )}
 
       {/* Manage categories modal */}
       <Modal
