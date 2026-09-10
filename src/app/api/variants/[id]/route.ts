@@ -79,14 +79,16 @@ export async function PATCH(request: Request, { params }: Params) {
       }
     }
 
+    const qtyDelta = data.quantityDelta ?? 0;
     // Revaluation happens only when the cost actually changes to a positive value
-    // (the product editor always sends costPrice, so an unchanged cost must not
-    // fire a revaluation). Quantity edits carry a signed delta + target location.
+    // AND no quantity changes in the same request: the product editor's "Add New
+    // Stock" mode sends costPrice + quantityDelta together, where costPrice is
+    // the NEW batch's cost — old batches must keep their old cost. A pure cost
+    // change (no quantity delta) revalues existing batches in place.
     const revalueCost =
-      data.costPrice !== undefined && data.costPrice !== null && data.costPrice > 0 && data.costPrice !== before.costPrice
+      data.costPrice !== undefined && data.costPrice !== null && data.costPrice > 0 && data.costPrice !== before.costPrice && qtyDelta === 0
         ? data.costPrice
         : null;
-    const qtyDelta = data.quantityDelta ?? 0;
     const stockAffecting = revalueCost !== null || qtyDelta !== 0;
 
     if (stockAffecting && !data.reason?.trim()) {

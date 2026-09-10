@@ -117,3 +117,23 @@ export const PRODUCT_EDIT_REASON_LABELS: Record<ProductEditReason, string> = {
   product_info_update: 'Product information update',
   other: 'Other',
 };
+
+export const PRODUCT_EDIT_MODES = ['add_stock', 'recount', 'edit_details'] as const;
+export type ProductEditMode = (typeof PRODUCT_EDIT_MODES)[number];
+
+export const PRODUCT_EDIT_MODE_LABELS: Record<ProductEditMode, string> = {
+  add_stock: 'Add New Stock',
+  recount: 'Stock Recount',
+  edit_details: 'Edit Details Only',
+};
+
+export const RECOUNT_REASONS = ['theft', 'damage', 'count_error', 'expired', 'other'] as const;
+export type RecountReason = (typeof RECOUNT_REASONS)[number];
+
+export const RECOUNT_REASON_LABELS: Record<RecountReason, string> = {
+  theft: 'Theft / Shrinkage',
+  damage: 'Damaged',
+  count_error: 'Count Error',
+  expired: 'Expired',
+  other: 'Other',
+};

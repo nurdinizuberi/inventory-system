@@ -6,7 +6,13 @@ import { Badge, Card, Empty, Field, Modal, TableWrap } from '@/components/ui';
 import { useAuth } from '@/components/auth-context';
 import { useToast } from '@/components/toast';
 import { api, errorMessage } from '@/lib/client';
-import { PRODUCT_EDIT_REASON_LABELS, PRODUCT_EDIT_REASONS, type ProductEditReason } from '@/lib/types';
+import {
+  PRODUCT_EDIT_MODE_LABELS,
+  RECOUNT_REASONS,
+  RECOUNT_REASON_LABELS,
+  type ProductEditMode,
+  type RecountReason,
+} from '@/lib/types';
 import { currency, escapeHtml } from '@/lib/utils';
 
 interface BatchInfo {
@@ -101,6 +107,8 @@ interface VariantEdit {
   locationId: string;
   /** Total units on hand (used to sanity-check a deduction). */
   onHand: number;
+  /** Per-location stock rows (drive per-location recount lines). */
+  stock: { locationId: string; onHand: number; sellable: number; reserved: number }[];
   /** Cost the row opened with, so we can detect a revaluation. */
   origCost: number | null;
 }
@@ -124,14 +132,18 @@ export default function ProductsPage() {
 
   // Edit state
   const [editing, setEditing] = useState<Product | null>(null);
+  const [editMode, setEditMode] = useState<ProductEditMode | null>(null);
+  // Mode picked on the selection screen but not confirmed with [Continue] yet.
+  const [modeDraft, setModeDraft] = useState<ProductEditMode | null>(null);
   const [editForm, setEditForm] = useState(EMPTY_FORM);
   const [editVariants, setEditVariants] = useState<VariantEdit[]>([]);
-  const [editReason, setEditReason] = useState<ProductEditReason | ''>('');
-  const [editReasonOther, setEditReasonOther] = useState('');
-  const origProductCost = useRef<number | null>(null);
   const [editBatches, setEditBatches] = useState<Map<string, BatchInfo[]>>(new Map());
   const [editBatchesLoading, setEditBatchesLoading] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [physicalCounts, setPhysicalCounts] = useState<Record<string, string>>({});
+  const [recountReason, setRecountReason] = useState<RecountReason | ''>('');
+  const [recountReasonOther, setRecountReasonOther] = useState('');
+  const [editNotes, setEditNotes] = useState('');
 
   // Category management
   const [catOpen, setCatOpen] = useState(false);
@@ -219,8 +231,6 @@ export default function ProductsPage() {
     }
     return errors;
   };
-
-  const hasErrors = useMemo(() => Object.keys(validate()).length > 0, [form, variantDrafts]);
 
   const create = async () => {
     const errors = validate();
@@ -315,10 +325,13 @@ export default function ProductsPage() {
 
   const openEdit = (product: Product) => {
     setEditing(product);
-    setEditReason('');
-    setEditReasonOther('');
+    setEditMode(null);
+    setModeDraft(null);
+    setRecountReason('');
+    setRecountReasonOther('');
+    setEditNotes('');
+    setPhysicalCounts({});
     setShowConfirm(false);
-    origProductCost.current = product.costPrice;
     const active = product.variants.filter((v) => v.isActive);
     const isSimple = active.length === 1 && active[0].isDefault && active[0].label === 'Standard';
     const defaultVariant = isSimple ? active[0] : undefined;
@@ -357,6 +370,7 @@ export default function ProductsPage() {
           qty: '',
           locationId: locations[0]?.id ?? '',
           onHand: (v.stock ?? []).reduce((s, r) => s + r.onHand, 0),
+          stock: (v.stock ?? []).map((row) => ({ ...row })),
           origCost: v.costPrice,
         };
       }),
@@ -382,114 +396,227 @@ export default function ProductsPage() {
       toast.push('error', 'Product name is required.');
       return;
     }
-    // Product-level prices are written only when they are actually used: plain
-    // products, or variant products the current user cannot reprice through the
-    // variant rows. Once real variants are priced, product-level defaults are
-    // cleared so a price is never stored in two places.
-    const writeProductPrices = showProductPrices || !variantsEditable;
-    if (writeProductPrices && (Number(editForm.basePrice) < 0 || Number(editForm.costPrice) < 0)) {
-      toast.push('error', 'Prices cannot be negative.');
-      return;
-    }
-    // Plain products carry their price/cost on the product row, so a selling
-    // price or cost of 0 would sell or value stock at 0.
-    if (showProductPrices && (!(Number(editForm.basePrice) > 0) || !(Number(editForm.costPrice) > 0))) {
-      toast.push('error', 'A plain product needs a selling price and cost greater than 0.');
-      return;
-    }
-    if (editVariants.some((v) => invalidVariantPrice(v) || invalidVariantCost(v))) {
-      toast.push('error', 'Every variant needs a selling price and cost greater than 0.');
-      return;
-    }
-    // Quantity edits must be integers; a new variant can only open with stock
-    // (never negative initial); every quantity change needs a location.
-    for (const v of editVariants) {
-      const q = editQtyNum(v);
-      if (q !== 0 && !Number.isInteger(q)) {
-        toast.push('error', 'Quantity changes must be whole numbers.');
+
+    // --- Mode-specific validation ---
+    if (editMode === 'add_stock') {
+      for (const v of editVariants.filter((vv) => vv.isActive || vv.isNew)) {
+        const q = editQtyNum(v);
+        if (q < 0 || (q > 0 && !Number.isInteger(q))) {
+          toast.push('error', `Quantity for ${v.label || 'variant'} must be a positive whole number.`);
+          return;
+        }
+        if (q > 0 && !(Number(v.cost) > 0)) {
+          toast.push('error', `Unit cost for ${v.label || 'variant'} must be greater than 0.`);
+          return;
+        }
+        // A brand-new variant is sold on its own price, so it must be explicit.
+        // An existing variant keeps its current selling price when left blank,
+        // but a typed invalid value is blocked rather than silently dropped.
+        if (v.isNew && !(Number(v.price) > 0)) {
+          toast.push('error', `Selling price for ${v.label || 'new variant'} must be greater than 0.`);
+          return;
+        }
+        if (!v.isNew && v.price !== '' && !(Number(v.price) > 0)) {
+          toast.push('error', `Selling price for ${v.label || 'variant'} must be greater than 0.`);
+          return;
+        }
+        if (q > 0 && v.cost !== '' && !(Number(v.cost) > 0)) {
+          toast.push('error', `Unit cost for ${v.label || 'variant'} must be greater than 0.`);
+          return;
+        }
+        if (q > 0 && !v.locationId) {
+          toast.push('error', `Choose a location for ${v.label || 'variant'}.`);
+          return;
+        }
+      }
+      const anyQty = editVariants.some((v) => (v.isActive || v.isNew) && editQtyNum(v) > 0);
+      if (!anyQty) {
+        toast.push('error', 'Enter a quantity for at least one variant.');
         return;
       }
-      if (v.isNew && q < 0) {
-        toast.push('error', 'A new variant cannot start with negative stock.');
-        return;
-      }
-      if ((v.isNew ? q > 0 : q !== 0) && !v.locationId) {
-        toast.push('error', 'Choose a location for every quantity change.');
+      if (!showConfirm) {
+        setShowConfirm(true);
         return;
       }
     }
-    if (reasonRequired) {
-      toast.push('error', 'A reason is required for cost or quantity changes.');
-      return;
+
+    if (editMode === 'recount') {
+      const hasAnyDifference = editVariants.some((v) => {
+        if (!v.isActive || v.isNew) return false;
+        return recountRows(v).some((row) => {
+          const physical = physicalCounts[countKey(v.id, row.locationId)];
+          if (physical === undefined || physical === '') return false;
+          return Number(physical) !== row.onHand;
+        });
+      });
+      if (!hasAnyDifference) {
+        toast.push('error', 'No quantity changes detected. Enter a physical count different from the system quantity.');
+        return;
+      }
+      // All variants with a difference need a location
+      for (const v of editVariants) {
+        if (!v.isActive || v.isNew) continue;
+        for (const row of recountRows(v)) {
+          const physical = physicalCounts[countKey(v.id, row.locationId)];
+          if (physical === undefined || physical === '') continue;
+          const diff = Number(physical) - row.onHand;
+          if (diff !== 0 && !row.locationId) {
+            toast.push('error', `Choose a location for ${v.label}.`);
+            return;
+          }
+        }
+      }
+      // Reason required for recounts with differences
+      const recountReasonFinal = recountReason === 'other' ? recountReasonOther.trim() : recountReason ? RECOUNT_REASON_LABELS[recountReason] : '';
+      if (!recountReasonFinal) {
+        toast.push('error', 'A reason is required for stock count adjustments.');
+        return;
+      }
+      if (!showConfirm) {
+        setShowConfirm(true);
+        return;
+      }
     }
-    // When stock-related fields changed, show a confirmation popup before saving.
-    if (hasStockChanges && !showConfirm) {
-      setShowConfirm(true);
-      return;
+
+    if (editMode === 'edit_details') {
+      const writeProductPrices = showProductPrices || !variantsEditable;
+      if (writeProductPrices && Number(editForm.basePrice) < 0) {
+        toast.push('error', 'Selling price cannot be negative.');
+        return;
+      }
+      if (showProductPrices && !(Number(editForm.basePrice) > 0)) {
+        toast.push('error', 'A plain product needs a selling price greater than 0.');
+        return;
+      }
+      // No stock confirmation needed for details-only edits
     }
+
+    if (!editMode) return;
+
     setBusy(true);
     try {
-      const newOptionNames = editForm.optionNames.split(',').map((s) => s.trim()).filter(Boolean);
-
-      const updateProduct = () =>
-        api.patch(`/api/products/${editing.id}`, {
-          name: editForm.name,
-          description: editForm.description || null,
-          basePrice: writeProductPrices ? Number(editForm.basePrice || 0) : 0,
-          costPrice: writeProductPrices ? Number(editForm.costPrice || 0) : 0,
-          categoryId: editForm.categoryId || null,
-          optionNames: newOptionNames,
-          ...(editReasonFinal ? { reason: editReasonFinal } : {}),
-        });
-
-      const updateVariants = async () => {
-        if (!variantsEditable) return;
-        for (const v of editVariants) {
-          const payload = {
-            label: v.label,
-            sku: v.sku,
-            barcode: v.barcode,
-            costPrice: v.cost !== '' ? Number(v.cost) : null,
-            sellingPrice: v.price !== '' ? Number(v.price) : null,
-            lowStockThreshold: Number(v.lowStock) || 10,
-            ...(editCostChanged(v) || editQtyChanged(v) ? { reason: editReasonFinal } : {}),
-            ...(editQtyChanged(v) ? { stockLocationId: v.locationId } : {}),
-            ...(editQtyChanged(v) && !v.isNew ? { quantityDelta: editQtyNum(v) } : {}),
-          };
+      if (editMode === 'add_stock') {
+        // Add New Stock: every variant with a quantity gets a NEW batch at the
+        // cost entered here; old batches keep their old cost and the catalog is
+        // not touched. Prices only travel when the user actually typed one.
+        const reason = editNotes.trim() || 'New stock added';
+        for (const v of editVariants.filter((vv) => vv.isActive || vv.isNew)) {
+          const q = editQtyNum(v);
+          if (q <= 0) continue;
           if (v.isNew) {
             if (!can('variant.create')) continue;
-            const blank = !v.label.trim() && !v.sku.trim() && !v.barcode.trim() && v.cost === '' && v.price === '' && editQtyNum(v) === 0;
-            if (blank) continue;
             await api.post('/api/variants', {
               productId: editing.id,
-              ...payload,
-              ...(editQtyNum(v) > 0 ? { quantity: editQtyNum(v), locationId: v.locationId } : {}),
+              label: v.label || 'Standard',
+              sku: v.sku,
+              barcode: v.barcode,
+              costPrice: Number(v.cost),
+              sellingPrice: Number(v.price),
+              lowStockThreshold: Number(v.lowStock) || 10,
+              quantity: q,
+              locationId: v.locationId,
+              reason,
             });
           } else {
             if (!can('variant.update')) continue;
-            await api.patch(`/api/variants/${v.id}`, payload);
+            await api.patch(`/api/variants/${v.id}`, {
+              ...(Number(v.cost) > 0 ? { costPrice: Number(v.cost) } : {}),
+              ...(v.price !== '' && Number(v.price) > 0 ? { sellingPrice: Number(v.price) } : {}),
+              reason,
+              stockLocationId: v.locationId,
+              quantityDelta: q,
+            });
           }
         }
-      };
-
-      // Order matters because of how the server validates price changes:
-      // - Plain products are priced on the product row, so update those defaults
-      //   first and let the default variant keep inheriting them.
-      // - Variant products own their price on each variant, so price the variants
-      //   first, then clear the (now unused) product-level defaults.
-      if (showProductPrices) {
-        await updateProduct();
-        await updateVariants();
-      } else {
-        await updateVariants();
-        await updateProduct();
       }
 
-      toast.push('success', 'Product updated.');
+      if (editMode === 'recount') {
+        const recountReasonFinal = recountReason === 'other' ? recountReasonOther.trim() : recountReason ? RECOUNT_REASON_LABELS[recountReason] : '';
+        for (const v of editVariants.filter((vv) => vv.isActive && !vv.isNew)) {
+          if (!can('variant.update')) continue;
+          for (const row of recountRows(v)) {
+            const physical = physicalCounts[countKey(v.id, row.locationId)];
+            if (physical === undefined || physical === '') continue;
+            const diff = Number(physical) - row.onHand;
+            if (diff === 0 || !row.locationId) continue;
+            await api.patch(`/api/variants/${v.id}`, {
+              quantityDelta: diff,
+              stockLocationId: row.locationId,
+              reason: recountReasonFinal,
+            });
+          }
+        }
+      }
+
+      if (editMode === 'edit_details') {
+        const newOptionNames = editForm.optionNames.split(',').map((s) => s.trim()).filter(Boolean);
+        const writeProductPrices = showProductPrices || !variantsEditable;
+        // Variants first: a plain product keeps its price on the product row, so
+        // when real variants just appeared the product PATCH below must see the
+        // fresh variant prices — otherwise the "needs a selling price > 0" check
+        // runs against the variants' stale (inherited) values.
+        if (variantsEditable) {
+          for (const v of editVariants) {
+            const payload: Record<string, unknown> = {
+              label: v.label,
+              sku: v.sku,
+              barcode: v.barcode,
+              lowStockThreshold: Number(v.lowStock) || 10,
+            };
+            // Selling price is only updated in edit_details mode if not on product row
+            if (!showProductPrices && v.price !== '') {
+              payload.sellingPrice = Number(v.price);
+            }
+            if (v.isNew) {
+              if (!can('variant.create')) continue;
+              const blank = !v.label.trim() && !v.sku.trim() && !v.barcode.trim();
+              if (blank) continue;
+              await api.post('/api/variants', {
+                productId: editing.id,
+                ...payload,
+                // A brand-new variant is sold and valued on its own price/cost.
+                // Sending them explicitly also keeps the product-defaults PATCH
+                // below from stranding the variant on a zeroed default.
+                ...(Number(v.cost) > 0 ? { costPrice: Number(v.cost) } : {}),
+                ...(v.price !== '' && Number(v.price) > 0 ? { sellingPrice: Number(v.price) } : {}),
+              });
+            } else {
+              if (!can('variant.update')) continue;
+              await api.patch(`/api/variants/${v.id}`, payload);
+            }
+          }
+        }
+        // Keep the product defaults when any variant still inherits them (no
+        // explicit price/cost of its own): zeroing them would strand that variant
+        // at 0 and fail the server's >0 validation. Only a fully self-priced
+        // variant product clears the (now hidden) product-level defaults.
+        const detailRows = editVariants.filter((v) => v.isActive || v.isNew);
+        const allSelfPriced = detailRows.every((v) => Number(v.price) > 0 && Number(v.cost) > 0);
+        // Update product metadata
+        await api.patch(`/api/products/${editing.id}`, {
+          name: editForm.name,
+          description: editForm.description || null,
+          basePrice: writeProductPrices ? Number(editForm.basePrice || 0) : allSelfPriced ? 0 : editing.basePrice,
+          costPrice: writeProductPrices ? Number(editForm.costPrice || 0) : allSelfPriced ? 0 : editing.costPrice,
+          categoryId: editForm.categoryId || null,
+          optionNames: newOptionNames,
+        });
+      }
+
+      const successMsg =
+        editMode === 'add_stock' ? 'New stock added successfully.' :
+        editMode === 'recount' ? 'Stock recount saved.' :
+        'Product details updated.';
+      toast.push('success', successMsg);
       setEditing(null);
-      setEditReason('');
+      setEditMode(null);
+      setModeDraft(null);
       setShowConfirm(false);
       setEditBatches(new Map());
+      setPhysicalCounts({});
+      setRecountReason('');
+      setRecountReasonOther('');
+      setEditNotes('');
       await load();
     } catch (err) {
       toast.push('error', errorMessage(err));
@@ -519,6 +646,7 @@ export default function ProductsPage() {
           qty: '',
           locationId: locations[0]?.id ?? '',
           onHand: 0,
+          stock: [],
           origCost: null,
         },
       ];
@@ -637,42 +765,17 @@ export default function ProductsPage() {
   // Smart stock edits (spec 16): quantity/cost changes move stock or revalue
   // its cost basis, so they need a reason and the stock.adjust permission.
   const editQtyNum = (v: VariantEdit) => (v.qty.trim() === '' ? 0 : Number(v.qty));
-  const editQtyChanged = (v: VariantEdit) => (v.isNew ? editQtyNum(v) > 0 : editQtyNum(v) !== 0);
-  const editCostChanged = (v: VariantEdit) =>
-    !v.isNew && (v.cost.trim() === '' ? null : Number(v.cost)) !== v.origCost;
-  const hasStockChanges =
-    (showProductPrices && Number(editForm.costPrice) !== origProductCost.current) ||
-    editVariants.some((v) => editCostChanged(v) || editQtyChanged(v));
-  // The picker stores the chosen reason key; 'other' maps to free text. The
-  // value actually recorded is the human-readable label so it reads well in the
-  // stock ledger notes and audit metadata.
-  const editReasonFinal =
-    editReason === 'other'
-      ? editReasonOther.trim()
-      : editReason
-        ? PRODUCT_EDIT_REASON_LABELS[editReason]
-        : '';
-  const reasonRequired = hasStockChanges && !editReasonFinal;
 
-  // A variant product sells and values each variant on its own, so a selling
-  // price or cost of 0 (or blank) would sell or value stock at 0. Require both to
-  // be greater than 0 on every variant that will be sold — except while the
-  // product is still plain (its price/cost live on the product) or when the
-  // current user cannot edit variant pricing at all.
-  const variantsEditable = can('variant.update') || can('variant.create');
-  const variantPricedOnRow = (v: VariantEdit) => {
-    if (!variantsEditable || showProductPrices) return false;
-    if (!v.isNew && !v.isActive) return false; // archived variants aren't sold
-    if (v.isNew) {
-      // New rows that are left completely blank are never created — they are
-      // fine without a price or cost.
-      const blankRow = !v.label.trim() && !v.sku.trim() && !v.barcode.trim() && v.cost === '' && v.price === '';
-      if (blankRow) return false;
-    }
-    return true;
+  // Recount rows: one per location holding stock (server-provided), or a single
+  // variant-wide row when per-location stock is unavailable. The fallback row
+  // lets the user pick a location; real rows are bound to their location.
+  const recountRows = (v: VariantEdit) => {
+    if (v.stock?.length) return v.stock.map((row) => ({ ...row, fallback: false as const }));
+    return [{ locationId: v.locationId, onHand: v.onHand, sellable: v.onHand, reserved: 0, fallback: true as const }];
   };
-  const invalidVariantPrice = (v: VariantEdit) => variantPricedOnRow(v) && !(Number(v.price) > 0);
-  const invalidVariantCost = (v: VariantEdit) => variantPricedOnRow(v) && !(Number(v.cost) > 0);
+  const countKey = (variantId: string, locationId: string) => `${variantId}:${locationId}`;
+
+  const variantsEditable = can('variant.update') || can('variant.create');
 
   // Price shown in the table: the single effective price for a plain product, or
   // a min–max range across active variants once there are real variants.
@@ -1178,42 +1281,343 @@ export default function ProductsPage() {
       {/* Edit product modal */}
       <Modal
         open={!!editing}
-        title="Edit product"
+        title={editMode ? `${PRODUCT_EDIT_MODE_LABELS[editMode]} — ${editing?.name ?? ''}` : 'Edit product'}
         wide
-        onClose={() => { setEditing(null); setShowConfirm(false); setEditBatches(new Map()); }}
+        onClose={() => { setEditing(null); setEditMode(null); setModeDraft(null); setShowConfirm(false); setEditBatches(new Map()); }}
         footer={
-          <>
-            <button className="btn-secondary" onClick={() => setEditing(null)} type="button">
-              Cancel
-            </button>
-            <button className="btn-primary" disabled={busy || !editForm.name.trim()} onClick={() => void saveEdit()} type="button">
-              {busy ? 'Saving…' : 'Save changes'}
-            </button>
-          </>
+          editMode === null ? (
+            <>
+              <button className="btn-secondary" onClick={() => { setEditing(null); setModeDraft(null); }} type="button">
+                Cancel
+              </button>
+              <button className="btn-primary" disabled={!modeDraft} onClick={() => { if (modeDraft) setEditMode(modeDraft); }} type="button">
+                Continue
+              </button>
+            </>
+          ) : (
+            <>
+              <button className="btn-secondary" onClick={() => { setEditMode(null); setModeDraft(null); }} type="button">
+                Back
+              </button>
+              <button className="btn-primary" disabled={busy || !editForm.name.trim()} onClick={() => void saveEdit()} type="button">
+                {busy ? 'Saving…' : editMode === 'recount' ? 'Save recount' : 'Save changes'}
+              </button>
+            </>
+          )
         }
       >
-        <div className="space-y-4">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Name">
-              <input className="input" value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} />
-              {!editForm.name.trim() && <p className="mt-1 text-xs text-red-500">Product name is required.</p>}
+        {/* Mode selection screen */}
+        {editMode === null && (
+          <div className="space-y-3">
+            <p className="text-sm text-ink-600 dark:text-ink-300">What do you want to do?</p>
+            {([
+              { mode: 'add_stock' as const, icon: '📦', title: 'Add New Stock (New Batch)', desc: 'I received new stock. Enter new quantity, new cost, and new selling price. Old stock keeps its old cost.' },
+              { mode: 'recount' as const, icon: '🔢', title: 'Stock Recount (Adjust Quantity)', desc: 'I counted my stock. Correct the quantity. Cost and selling price stay the same.' },
+              { mode: 'edit_details' as const, icon: '✏️', title: 'Edit Details Only', desc: 'Change name, description, SKU, or selling price. No stock changes.' },
+            ]).map((opt) => (
+              <label
+                key={opt.mode}
+                className="flex cursor-pointer items-start gap-3 rounded-lg border border-ink-200 p-4 transition hover:border-ink-400 dark:border-ink-700 dark:hover:border-ink-500"
+              >
+                <input
+                  type="radio"
+                  name="editMode"
+                  className="mt-0.5"
+                  value={opt.mode}
+                  checked={modeDraft === opt.mode}
+                  onChange={() => setModeDraft(opt.mode)}
+                />
+                <div>
+                  <p className="text-sm font-medium text-ink-900 dark:text-ink-100">{opt.icon} {opt.title}</p>
+                  <p className="mt-0.5 text-xs text-ink-500 dark:text-ink-400">{opt.desc}</p>
+                </div>
+              </label>
+            ))}
+          </div>
+        )}
+
+        {/* Add New Stock form */}
+        {editMode === 'add_stock' && (
+          <div className="space-y-4">
+            <p className="text-xs text-ink-500 dark:text-ink-400">
+              Enter the new stock you received. Each variant gets a new batch at the cost you specify. Old batches are untouched.
+            </p>
+            {can('variant.update') || can('variant.create') ? (
+              <div className="space-y-3">
+                {editVariants.filter((v) => v.isActive || v.isNew).map((v) => (
+                  <div key={v.id} className="space-y-2 rounded-lg border border-ink-200 p-3 dark:border-ink-700">
+                    {v.isNew && (
+                      <div className="mb-1 flex items-center justify-between">
+                        <span className="text-xs font-medium text-blue-600 dark:text-blue-400">New variant</span>
+                        <button className="btn-ghost btn-sm" onClick={() => removeEditVariant(v.id)} type="button">✕ Remove</button>
+                      </div>
+                    )}
+                    <p className="text-sm font-medium text-ink-900 dark:text-ink-100">
+                      {v.label || (v.isNew ? 'New variant' : 'Standard')}
+                      {!v.isNew && <span className="ml-2 text-xs text-ink-400">({v.onHand} on hand)</span>}
+                    </p>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                      <Field label="Quantity">
+                        <input
+                          className="input"
+                          type="number"
+                          min={0}
+                          inputMode="numeric"
+                          value={v.qty}
+                          placeholder="0"
+                          onChange={(e) => {
+                            const raw = e.target.value.trim();
+                            if (/^\d*$/.test(raw)) setVariant(v.id, { qty: raw });
+                          }}
+                        />
+                      </Field>
+                      <Field label="Unit Cost">
+                        <input
+                          className="input"
+                          type="number"
+                          inputMode="decimal"
+                          value={v.cost}
+                          placeholder="0"
+                          onChange={(e) => setVariant(v.id, { cost: e.target.value })}
+                        />
+                        {v.cost !== '' && !(Number(v.cost) > 0) && (
+                          <p className="mt-1 text-xs text-red-500">Must be &gt; 0.</p>
+                        )}
+                      </Field>
+                      <Field label="Selling Price">
+                        <input
+                          className="input"
+                          type="number"
+                          inputMode="decimal"
+                          value={v.price}
+                          placeholder="0"
+                          onChange={(e) => setVariant(v.id, { price: e.target.value })}
+                        />
+                        {v.price !== '' && !(Number(v.price) > 0) && (
+                          <p className="mt-1 text-xs text-red-500">Must be &gt; 0.</p>
+                        )}
+                      </Field>
+                      <Field label="Location">
+                        <select
+                          className="input"
+                          value={v.locationId}
+                          onChange={(e) => setVariant(v.id, { locationId: e.target.value })}
+                        >
+                          <option value="">— select —</option>
+                          {locations.map((loc) => (
+                            <option key={loc.id} value={loc.id}>
+                              {loc.name}{loc.type === 'RETAIL_STORE' ? ' (store)' : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                    </div>
+                    {Number(v.qty) > 0 && (
+                      <p className="text-xs text-amber-600 dark:text-amber-400">
+                        Will create a new batch with {v.qty} unit(s) at {currency(Number(v.cost || 0))} each.
+                      </p>
+                    )}
+                    {can('variant.create') && (
+                      <button className="btn-ghost btn-sm" onClick={addEditVariant} type="button">+ Add another variant</button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-ink-500 dark:text-ink-400">You don't have permission to add stock.</p>
+            )}
+            <Field label="Notes (optional)">
+              <input
+                className="input"
+                value={editNotes}
+                placeholder="e.g. Delivery note #1234"
+                onChange={(e) => setEditNotes(e.target.value)}
+              />
             </Field>
-            <Field label="Category">
+          </div>
+        )}
+
+        {/* Stock Recount form */}
+        {editMode === 'recount' && (
+          <div className="space-y-4">
+            <p className="text-xs text-ink-500 dark:text-ink-400">
+              Enter the physical count for each variant. The system will calculate the difference and adjust stock accordingly (FIFO for decreases).
+            </p>
+            {(can('variant.update') || can('variant.create')) && can('stock.adjust') ? (
+              <div className="space-y-3">
+                {editVariants.filter((v) => v.isActive && !v.isNew).flatMap((v) =>
+                  recountRows(v).map((row) => {
+                  const systemQty = row.onHand;
+                  const key = countKey(v.id, row.locationId);
+                  const physical = physicalCounts[key] ?? '';
+                  const physicalNum = physical === '' ? null : Number(physical);
+                  const diff = physicalNum !== null ? physicalNum - systemQty : null;
+                  const location = locations.find((l) => l.id === row.locationId);
+                  return (
+                    <div key={key} className="space-y-2 rounded-lg border border-ink-200 p-3 dark:border-ink-700">
+                      <p className="text-sm font-medium text-ink-900 dark:text-ink-100">
+                        {v.label}
+                        {location && !row.fallback && (
+                          <span className="ml-2 text-xs font-normal text-ink-400">{location.name}</span>
+                        )}
+                      </p>
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                        {row.fallback ? (
+                          <Field label="Location">
+                            <select
+                              className="input"
+                              value={row.locationId}
+                              onChange={(e) => setVariant(v.id, { locationId: e.target.value })}
+                            >
+                              <option value="">— select —</option>
+                              {locations.map((loc) => (
+                                <option key={loc.id} value={loc.id}>
+                                  {loc.name}{loc.type === 'RETAIL_STORE' ? ' (store)' : ''}
+                                </option>
+                              ))}
+                            </select>
+                          </Field>
+                        ) : (
+                          <Field label="Location">
+                            <input
+                              className="input bg-ink-50 dark:bg-ink-800/50"
+                              value={location?.name ?? row.locationId.slice(-6)}
+                              disabled
+                              readOnly
+                            />
+                          </Field>
+                        )}
+                        <Field label="System Quantity">
+                          <input
+                            className="input bg-ink-50 dark:bg-ink-800/50"
+                            type="number"
+                            value={systemQty}
+                            disabled
+                            readOnly
+                          />
+                        </Field>
+                        <Field label="Physical Count">
+                          <input
+                            className="input"
+                            type="number"
+                            min={0}
+                            inputMode="numeric"
+                            value={physical}
+                            placeholder="0"
+                            onChange={(e) => {
+                              const raw = e.target.value.trim();
+                              if (/^\d*$/.test(raw)) setPhysicalCounts({ ...physicalCounts, [key]: raw });
+                            }}
+                          />
+                        </Field>
+                        <Field label="Difference">
+                          <input
+                            className={`input ${diff !== null && diff !== 0 ? (diff > 0 ? 'bg-emerald-50 dark:bg-emerald-900/20' : 'bg-red-50 dark:bg-red-900/20') : ''}`}
+                            type="text"
+                            value={diff !== null ? (diff > 0 ? `+${diff}` : String(diff)) : '—'}
+                            disabled
+                            readOnly
+                          />
+                        </Field>
+                      </div>
+                      {diff !== null && diff !== 0 && (
+                        <p className={`text-xs ${diff > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                          {diff > 0
+                            ? `Will add ${diff} unit(s) as a new batch.`
+                            : `Will remove ${Math.abs(diff)} unit(s) via FIFO.`}
+                        </p>
+                      )}
+                      {/* Stock breakdown */}
+                      {systemQty > 0 && (
+                        <div className="mt-1 rounded-lg border border-ink-100 bg-ink-50 p-2.5 dark:border-ink-700 dark:bg-ink-800/30">
+                          <p className="mb-1 text-xs font-medium text-ink-600 dark:text-ink-300">
+                            Stock breakdown
+                            {editBatchesLoading && <span className="ml-1 text-ink-400">loading…</span>}
+                          </p>
+                          {(() => {
+                            const batches = editBatches.get(v.id) ?? [];
+                            if (batches.length === 0 && !editBatchesLoading) {
+                              return <p className="text-xs text-ink-400">No active batches.</p>;
+                            }
+                            return (
+                              <div className="space-y-1">
+                                {batches.map((b) => (
+                                  <div key={b.code} className="flex items-center justify-between text-xs">
+                                    <span className="text-ink-500 dark:text-ink-400">
+                                      {b.code}: {b.remainingQty} unit(s) @ {currency(b.unitCost)}
+                                      <span className="ml-1 text-ink-400">
+                                        ({b.locationName}, {new Date(b.receivedAt).toLocaleDateString()})
+                                      </span>
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      )}
+                    </div>
+                  );
+                  }))}
+              </div>
+            ) : (
+              <p className="text-sm text-ink-500 dark:text-ink-400">
+                {!can('stock.adjust')
+                  ? "You don't have permission to adjust stock."
+                  : 'No active variants to recount.'}
+              </p>
+            )}
+            <Field label="Reason" hint="Required when there is a difference between system and physical count.">
               <select
                 className="input"
-                value={editForm.categoryId}
-                onChange={(e) => setEditForm({ ...editForm, categoryId: e.target.value })}
+                value={recountReason}
+                onChange={(e) => setRecountReason(e.target.value as RecountReason | '')}
               >
-                <option value="">— none —</option>
-                {categories.map((category) => (
-                  <option key={category.id} value={category.id}>
-                    {category.name}
+                <option value="">— choose a reason —</option>
+                {RECOUNT_REASONS.map((r) => (
+                  <option key={r} value={r}>
+                    {RECOUNT_REASON_LABELS[r]}
                   </option>
                 ))}
               </select>
+              {recountReason === 'other' && (
+                <input
+                  className="input mt-2"
+                  value={recountReasonOther}
+                  placeholder="Describe the reason…"
+                  onChange={(e) => setRecountReasonOther(e.target.value)}
+                />
+              )}
             </Field>
-            {showProductPrices && (
-              <>
+          </div>
+        )}
+
+        {/* Edit Details Only form */}
+        {editMode === 'edit_details' && (
+          <div className="space-y-4">
+            <p className="text-xs text-ink-500 dark:text-ink-400">
+              Update product information. No stock will be added or removed.
+            </p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Name">
+                <input className="input" value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} />
+                {!editForm.name.trim() && <p className="mt-1 text-xs text-red-500">Product name is required.</p>}
+              </Field>
+              <Field label="Category">
+                <select
+                  className="input"
+                  value={editForm.categoryId}
+                  onChange={(e) => setEditForm({ ...editForm, categoryId: e.target.value })}
+                >
+                  <option value="">— none —</option>
+                  {categories.map((category) => (
+                    <option key={category.id} value={category.id}>
+                      {category.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              {showProductPrices && (
                 <Field label="Default selling price" hint="Changes what customers pay. Future sales only.">
                   <input
                     className="input"
@@ -1227,290 +1631,90 @@ export default function ProductsPage() {
                     <p className="mt-1 text-xs text-red-500">Selling price must be greater than 0.</p>
                   )}
                 </Field>
-                <Field label="Default cost price" hint="New stock uses this cost. Old stock keeps old cost.">
-                  <input
-                    className="input"
-                    inputMode="decimal"
-                    type="number"
-                    value={editForm.costPrice}
-                    placeholder="0"
-                    onChange={(e) => setEditForm({ ...editForm, costPrice: e.target.value })}
-                  />
-                  {!(Number(editForm.costPrice) > 0) && (
-                    <p className="mt-1 text-xs text-red-500">Cost must be greater than 0.</p>
-                  )}
-                </Field>
-              </>
-            )}
-            <Field
-              label="Reason for edit"
-              hint={
-                hasStockChanges
-                  ? 'Required for cost or stock changes — recorded on the stock ledger and audit log.'
-                  : 'Recorded on the audit log.'
-              }
-              className="sm:col-span-2"
-            >
-              <select
-                className="input"
-                value={editReason}
-                onChange={(e) => setEditReason(e.target.value as ProductEditReason | '')}
-              >
-                <option value="">— choose a reason —</option>
-                {PRODUCT_EDIT_REASONS.map((r) => (
-                  <option key={r} value={r}>
-                    {PRODUCT_EDIT_REASON_LABELS[r]}
-                  </option>
-                ))}
-              </select>
-              {editReason === 'other' && (
-                <input
-                  className="input mt-2"
-                  value={editReasonOther}
-                  placeholder="Describe the reason…"
-                  onChange={(e) => setEditReasonOther(e.target.value)}
-                />
               )}
-              {reasonRequired && <p className="mt-1 text-xs text-red-500">A reason is required for cost or quantity changes.</p>}
-            </Field>
-            <Field label="Option names" hint="Comma separated, e.g. Size,Color" className="sm:col-span-2">
-              <input
-                className="input"
-                value={editForm.optionNames}
-                onChange={(e) => setEditForm({ ...editForm, optionNames: e.target.value })}
-              />
-            </Field>
-            <Field label="Description" className="sm:col-span-2">
-              <textarea
-                className="input"
-                rows={2}
-                value={editForm.description}
-                onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
-              />
-            </Field>
-          </div>
-
-          <div>
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <span className="label mb-0">Variants</span>
-              <div className="flex items-center gap-2">
-                {can('variant.create') && (
-                  <button
-                    className="btn-secondary btn-sm"
-                    onClick={addEditVariant}
-                    type="button"
-                  >
-                    + Add variant
-                  </button>
-                )}
-                {!can('variant.update') && !can('variant.create') && (
-                  <span className="text-xs text-ink-400">You don’t have variant edit permission — product fields only.</span>
-                )}
-              </div>
+              <Field label="Description" className="sm:col-span-2">
+                <textarea
+                  className="input"
+                  rows={2}
+                  value={editForm.description}
+                  onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
+                />
+              </Field>
+              <Field label="Option names" hint="Comma separated, e.g. Size,Color" className="sm:col-span-2">
+                <input
+                  className="input"
+                  value={editForm.optionNames}
+                  onChange={(e) => setEditForm({ ...editForm, optionNames: e.target.value })}
+                />
+              </Field>
             </div>
+            {/* Variant metadata (read-only cost) */}
             {can('variant.update') || can('variant.create') ? (
-              <div className="space-y-3">
-                {editVariants.map((v) => (
-                  <div key={v.id} className="space-y-2 rounded-lg border border-ink-200 p-3 dark:border-ink-700">
-                    {v.isNew && (
-                      <div className="mb-1 flex items-center justify-between">
-                        <span className="text-xs font-medium text-blue-600 dark:text-blue-400">New variant</span>
-                        <button className="btn-ghost btn-sm" onClick={() => removeEditVariant(v.id)} type="button">✕ Remove</button>
+              <div>
+                <p className="label mb-2">Variant details</p>
+                <div className="space-y-3">
+                  {editVariants.filter((v) => v.isActive || v.isNew).map((v) => (
+                    <div key={v.id} className="space-y-2 rounded-lg border border-ink-200 p-3 dark:border-ink-700">
+                      {v.isNew && (
+                        <div className="mb-1 flex items-center justify-between">
+                          <span className="text-xs font-medium text-blue-600 dark:text-blue-400">New variant</span>
+                          <button className="btn-ghost btn-sm" onClick={() => removeEditVariant(v.id)} type="button">✕ Remove</button>
+                        </div>
+                      )}
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                        <Field label="Label">
+                          <input className="input" value={v.label} onChange={(e) => setVariant(v.id, { label: e.target.value })} />
+                        </Field>
+                        <Field label="SKU">
+                          <input className="input" value={v.sku} onChange={(e) => setVariant(v.id, { sku: e.target.value })} />
+                        </Field>
+                        <Field label="Barcode">
+                          <input className="input" value={v.barcode} onChange={(e) => setVariant(v.id, { barcode: e.target.value })} />
+                        </Field>
                       </div>
-                    )}
-                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                      <Field label="Label">
-                        <input className="input" value={v.label} onChange={(e) => setVariant(v.id, { label: e.target.value })} />
-                        {!v.label.trim() && !v.isNew && <p className="mt-1 text-xs text-red-500">Label is required.</p>}
-                      </Field>
-                      <Field label="SKU">
-                        <input className="input" value={v.sku} onChange={(e) => setVariant(v.id, { sku: e.target.value })} />
-                        {!v.sku.trim() && !v.isNew && <p className="mt-1 text-xs text-red-500">SKU is required.</p>}
-                      </Field>
-                      <Field label="Barcode">
-                        <input className="input" value={v.barcode} onChange={(e) => setVariant(v.id, { barcode: e.target.value })} />
-                        {!v.barcode.trim() && !v.isNew && <p className="mt-1 text-xs text-red-500">Barcode is required.</p>}
-                      </Field>
-                    </div>
-                    <div className="grid grid-cols-3 gap-2">
-                      <Field
-                        label="Cost"
-                        hint={
-                          showProductPrices && v.isActive && !v.isNew
-                            ? 'Set on the product'
-                            : 'New stock uses this cost. Old stock keeps old cost.'
-                        }
-                      >
-                        <input
-                          className="input"
-                          type="number"
-                          inputMode="decimal"
-                          value={showProductPrices && v.isActive && !v.isNew ? editForm.costPrice : v.cost}
-                          placeholder="0"
-                          disabled={showProductPrices && v.isActive && !v.isNew}
-                          onChange={(e) => setVariant(v.id, { cost: e.target.value })}
-                        />
-                        {invalidVariantCost(v) && (
-                          <p className="mt-1 text-xs text-red-500">Cost must be greater than 0.</p>
-                        )}
-                      </Field>
-                      <Field
-                        label="Price"
-                        hint={
-                          showProductPrices && v.isActive && !v.isNew
-                            ? 'Set on the product'
-                            : 'Changes what customers pay. Future sales only.'
-                        }
-                      >
-                        <input
-                          className="input"
-                          type="number"
-                          inputMode="decimal"
-                          value={showProductPrices && v.isActive && !v.isNew ? editForm.basePrice : v.price}
-                          placeholder="0"
-                          disabled={showProductPrices && v.isActive && !v.isNew}
-                          onChange={(e) => setVariant(v.id, { price: e.target.value })}
-                        />
-                        {invalidVariantPrice(v) && (
-                          <p className="mt-1 text-xs text-red-500">Selling price must be greater than 0.</p>
-                        )}
-                      </Field>
-                      <Field label="Low at">
+                      <div className="grid grid-cols-2 gap-2">
+                        <Field label="Selling Price" hint="Changes what customers pay. Future sales only.">
+                          <input
+                            className="input"
+                            type="number"
+                            inputMode="decimal"
+                            value={showProductPrices && v.isActive && !v.isNew ? editForm.basePrice : v.price}
+                            placeholder="0"
+                            disabled={showProductPrices && v.isActive && !v.isNew}
+                            onChange={(e) => setVariant(v.id, { price: e.target.value })}
+                          />
+                        </Field>
+                        <Field label="Cost" hint={v.isNew ? 'Leave blank to use the product default.' : 'Read-only in this mode.'}>
+                          {v.isNew ? (
+                            <input
+                              className="input"
+                              type="number"
+                              inputMode="decimal"
+                              value={v.cost}
+                              placeholder="0"
+                              onChange={(e) => setVariant(v.id, { cost: e.target.value })}
+                            />
+                          ) : (
+                            <input
+                              className="input bg-ink-50 dark:bg-ink-800/50"
+                              type="text"
+                              value={showProductPrices ? editForm.costPrice : v.cost || ''}
+                              disabled
+                              readOnly
+                            />
+                          )}
+                        </Field>
+                      </div>
+                      <Field label="Low stock alert at">
                         <input className="input" type="number" min={0} value={v.lowStock} placeholder="0"
                           onChange={(e) => setVariant(v.id, { lowStock: e.target.value })} />
                       </Field>
                     </div>
-                    {editQtyChanged(v) && (
-                      <p className="text-xs text-amber-600 dark:text-amber-400">
-                        {v.isNew
-                          ? `Will open with ${editQtyNum(v)} unit(s)`
-                          : `Will change stock by ${editQtyNum(v) > 0 ? '+' : ''}${editQtyNum(v)} (${v.onHand} on hand)`}
-                      </p>
-                    )}
-                    {can('stock.adjust') && (
-                      <div className="grid grid-cols-2 gap-2">
-                        <Field
-                          label={v.isNew ? 'Opening quantity' : 'Quantity change'}
-                          hint={
-                            v.isNew
-                              ? undefined
-                              : `${v.onHand} on hand — increase adds a batch, decrease removes oldest first (FIFO)`
-                          }
-                        >
-                          <div className="flex gap-2">
-                            <input
-                              className="input flex-1"
-                              type="text"
-                              inputMode="decimal"
-                              value={v.qty}
-                              placeholder={v.isNew ? '0' : '+/-'}
-                              onChange={(e) => {
-                                const raw = e.target.value.trim();
-                                if (/^-?\d*\.?\d*$/.test(raw)) setVariant(v.id, { qty: raw });
-                              }}
-                            />
-                            <div className="flex shrink-0 gap-1">
-                              {!v.isNew && (
-                                <button
-                                  className="btn-ghost btn-sm"
-                                  type="button"
-                                  aria-label="Toggle sign"
-                                  title="Make the change negative / positive"
-                                  onClick={() => {
-                                    const current = editQtyNum(v);
-                                    const next = current < 0 ? Math.abs(current) : -Math.max(1, Math.abs(current));
-                                    setVariant(v.id, { qty: String(next) });
-                                  }}
-                                >
-                                  ±
-                                </button>
-                              )}
-                              <button
-                                className="btn-ghost btn-sm"
-                                type="button"
-                                aria-label="Add one"
-                                onClick={() => setVariant(v.id, { qty: String(editQtyNum(v) + 1) })}
-                              >
-                                +1
-                              </button>
-                              <button
-                                className="btn-ghost btn-sm"
-                                type="button"
-                                aria-label="Subtract one"
-                                onClick={() => {
-                                  const next = editQtyNum(v) - 1;
-                                  setVariant(v.id, { qty: String(v.isNew ? Math.max(0, next) : next) });
-                                }}
-                              >
-                                −1
-                              </button>
-                            </div>
-                          </div>
-                        </Field>
-                        {(v.isNew ? editQtyNum(v) > 0 : editQtyNum(v) !== 0) && (
-                          <Field label="Location">
-                            <select
-                              className="input"
-                              value={v.locationId}
-                              onChange={(e) => setVariant(v.id, { locationId: e.target.value })}
-                            >
-                              <option value="">— select —</option>
-                              {locations.map((location) => (
-                                <option key={location.id} value={location.id}>
-                                  {location.name}
-                                </option>
-                              ))}
-                            </select>
-                            {!v.locationId && (
-                              <p className="mt-1 text-xs text-red-500">Location required.</p>
-                            )}
-                          </Field>
-                        )}
-                      </div>
-                    )}
-                    {/* Stock breakdown — read-only batch display */}
-                    {!v.isNew && v.onHand > 0 && (
-                      <div className="mt-2 rounded-lg border border-ink-100 bg-ink-50 p-2.5 dark:border-ink-700 dark:bg-ink-800/30">
-                        <p className="mb-1.5 text-xs font-medium text-ink-600 dark:text-ink-300">
-                          Stock breakdown
-                          {editBatchesLoading && <span className="ml-1 text-ink-400">loading…</span>}
-                        </p>
-                        {(() => {
-                          const batches = editBatches.get(v.id) ?? [];
-                          if (batches.length === 0 && !editBatchesLoading) {
-                            return <p className="text-xs text-ink-400">No active batches.</p>;
-                          }
-                          const totalQty = batches.reduce((s, b) => s + b.remainingQty, 0);
-                          const avgCost = totalQty > 0 ? batches.reduce((s, b) => s + b.unitCost * b.remainingQty, 0) / totalQty : 0;
-                          return (
-                            <>
-                              <div className="space-y-1">
-                                {batches.map((b) => (
-                                  <div key={b.code} className="flex items-center justify-between text-xs">
-                                    <span className="text-ink-500 dark:text-ink-400">
-                                      {b.code}: {b.remainingQty} unit(s) @ {currency(b.unitCost)}
-                                      <span className="ml-1 text-ink-400">
-                                        ({b.locationName}, {new Date(b.receivedAt).toLocaleDateString()})
-                                      </span>
-                                    </span>
-                                  </div>
-                                ))}
-                              </div>
-                              {batches.length > 0 && (
-                                <div className="mt-1.5 border-t border-ink-200 pt-1.5 dark:border-ink-700">
-                                  <p className="text-xs text-ink-500 dark:text-ink-400">
-                                    Total: {totalQty} unit(s) · Avg cost: {currency(avgCost)}
-                                  </p>
-                                  <p className="text-xs text-ink-400">Sells oldest first (FIFO)</p>
-                                </div>
-                              )}
-                            </>
-                          );
-                        })()}
-                      </div>
-                    )}
-                  </div>
-                ))}
+                  ))}
+                </div>
+                {can('variant.create') && (
+                  <button className="btn-secondary btn-sm mt-2" onClick={addEditVariant} type="button">+ Add variant</button>
+                )}
               </div>
             ) : (
               <p className="text-sm text-ink-500 dark:text-ink-400">
@@ -1518,14 +1722,14 @@ export default function ProductsPage() {
               </p>
             )}
           </div>
-        </div>
+        )}
       </Modal>
 
       {/* Confirm stock changes modal */}
       {editing && (
         <Modal
           open={showConfirm}
-          title="Confirm changes"
+          title={editMode === 'recount' ? 'Confirm stock recount' : 'Confirm new stock'}
           wide
           onClose={() => setShowConfirm(false)}
           footer={
@@ -1534,79 +1738,79 @@ export default function ProductsPage() {
                 Cancel
               </button>
               <button className="btn-primary" disabled={busy} onClick={() => void saveEdit()} type="button">
-                {busy ? 'Saving…' : 'Yes, save'}
+                {busy ? 'Saving…' : editMode === 'recount' ? 'Yes, save recount' : 'Yes, add stock'}
               </button>
             </>
           }
         >
           <div className="space-y-4">
-            <p className="text-sm text-ink-600 dark:text-ink-300">
-              You are about to save the following stock-related changes:
-            </p>
-            <div className="space-y-2">
-              {/* Product-level cost change */}
-              {showProductPrices && Number(editForm.costPrice) !== origProductCost.current && (
-                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-700 dark:bg-amber-900/20">
-                  <p className="text-xs font-medium text-amber-700 dark:text-amber-300">Cost price</p>
-                  <p className="text-sm">
-                    {currency(origProductCost.current ?? 0)} → {currency(Number(editForm.costPrice))}
-                    <span className="ml-2 text-xs text-amber-600 dark:text-amber-400">(revalues existing stock)</span>
-                  </p>
-                </div>
-              )}
-              {/* Product-level selling price change */}
-              {showProductPrices && Number(editForm.basePrice) !== (editing.variants[0]?.sellingPrice ?? editing.basePrice) && (
-                <div className="rounded-lg border border-ink-200 p-3 dark:border-ink-700">
-                  <p className="text-xs font-medium text-ink-500 dark:text-ink-400">Selling price</p>
-                  <p className="text-sm">
-                    {currency(editing.variants[0]?.sellingPrice ?? editing.basePrice)} → {currency(Number(editForm.basePrice))}
-                    <span className="ml-2 text-xs text-ink-400">(future sales only)</span>
-                  </p>
-                </div>
-              )}
-              {/* Per-variant changes */}
-              {editVariants.map((v) => {
-                if (v.isNew) return null;
-                const orig = editing.variants.find((ev) => ev.id === v.id);
-                if (!orig) return null;
-                const costChanged = editCostChanged(v);
-                const qtyDelta = editQtyNum(v);
-                const qtyChanged = editQtyChanged(v);
-                const origPrice = orig.sellingPrice ?? editing.basePrice;
-                const newPrice = Number(v.price || editForm.basePrice);
-                const priceChanged = Number(v.price) > 0 && newPrice !== origPrice;
-                if (!costChanged && !qtyChanged && !priceChanged) return null;
-                const location = locations.find((l) => l.id === v.locationId);
-                return (
-                  <div key={v.id} className="rounded-lg border border-ink-200 p-3 dark:border-ink-700">
-                    <p className="mb-2 text-xs font-medium text-ink-700 dark:text-ink-200">{v.label}</p>
-                    <div className="space-y-1 text-sm">
-                      {priceChanged && (
-                        <p>Selling price: {currency(origPrice)} → {currency(newPrice)} <span className="text-xs text-ink-400">(future sales only)</span></p>
-                      )}
-                      {costChanged && (
-                        <p>Cost: {currency(v.origCost ?? 0)} → {currency(Number(v.cost))} <span className="text-xs text-ink-400">(new stock only)</span></p>
-                      )}
-                      {qtyChanged && (
-                        <p>
-                          Quantity: {v.onHand} → {v.onHand + qtyDelta}
-                          {qtyDelta > 0 ? (
-                            <span className="ml-1 text-xs text-green-600 dark:text-green-400">(+{qtyDelta} new batch at {currency(Number(v.cost || editForm.costPrice))})</span>
-                          ) : (
-                            <span className="ml-1 text-xs text-amber-600 dark:text-amber-400">({qtyDelta} removed FIFO)</span>
-                          )}
+            {editMode === 'add_stock' && (
+              <>
+                <p className="text-sm text-ink-600 dark:text-ink-300">
+                  You are about to add new stock for <strong>{editing.name}</strong>:
+                </p>
+                <div className="space-y-2">
+                  {editVariants.filter((v) => v.isActive || v.isNew).map((v) => {
+                    const q = editQtyNum(v);
+                    if (q <= 0) return null;
+                    const location = locations.find((l) => l.id === v.locationId);
+                    return (
+                      <div key={v.id} className="rounded-lg border border-ink-200 p-3 dark:border-ink-700">
+                        <p className="mb-1 text-xs font-medium text-ink-700 dark:text-ink-200">
+                          {v.label || 'New variant'}
+                          {v.isNew && <span className="ml-1 text-blue-600 dark:text-blue-400">(new)</span>}
                         </p>
-                      )}
-                      {qtyChanged && location && (
-                        <p className="text-xs text-ink-400">Location: {location.name}</p>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            {editReasonFinal && (
-              <p className="text-xs text-ink-500 dark:text-ink-400">Reason: {editReasonFinal}</p>
+                        <div className="space-y-1 text-sm">
+                          <p>
+                            Adding <strong>{q}</strong> unit(s) at {currency(Number(v.cost))} each
+                            <span className="ml-2 text-xs text-ink-400">(total: {currency(q * Number(v.cost))})</span>
+                          </p>
+                          <p>Selling price: {currency(Number(v.price))}</p>
+                          {location && <p className="text-xs text-ink-400">Location: {location.name}</p>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+            {editMode === 'recount' && (
+              <>
+                <p className="text-sm text-ink-600 dark:text-ink-300">
+                  You are about to save the following stock adjustments for <strong>{editing.name}</strong>:
+                </p>
+                <div className="space-y-2">
+                  {editVariants.filter((v) => v.isActive && !v.isNew).flatMap((v) =>
+                    recountRows(v).map((row) => {
+                    const physical = physicalCounts[countKey(v.id, row.locationId)];
+                    if (physical === undefined || physical === '') return null;
+                    const diff = Number(physical) - row.onHand;
+                    if (diff === 0) return null;
+                    const location = locations.find((l) => l.id === row.locationId);
+                    return (
+                      <div key={countKey(v.id, row.locationId)} className="rounded-lg border border-ink-200 p-3 dark:border-ink-700">
+                        <p className="mb-1 text-xs font-medium text-ink-700 dark:text-ink-200">{v.label}</p>
+                        <div className="space-y-1 text-sm">
+                          <p>
+                            Quantity: {row.onHand} → {Number(physical)}
+                            {diff > 0 ? (
+                              <span className="ml-1 text-xs text-green-600 dark:text-green-400">(+{diff} new batch)</span>
+                            ) : (
+                              <span className="ml-1 text-xs text-amber-600 dark:text-amber-400">({diff} removed FIFO)</span>
+                            )}
+                          </p>
+                          {location && <p className="text-xs text-ink-400">Location: {location.name}</p>}
+                        </div>
+                      </div>
+                    );
+                    }))}
+                </div>
+                {recountReason && (
+                  <p className="text-xs text-ink-500 dark:text-ink-400">
+                    Reason: {recountReason === 'other' ? recountReasonOther.trim() : RECOUNT_REASON_LABELS[recountReason]}
+                  </p>
+                )}
+              </>
             )}
           </div>
         </Modal>
