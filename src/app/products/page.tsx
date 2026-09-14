@@ -111,6 +111,11 @@ interface VariantEdit {
   stock: { locationId: string; onHand: number; sellable: number; reserved: number }[];
   /** Cost the row opened with, so we can detect a revaluation. */
   origCost: number | null;
+  /** Selling price the row opened with, so folded price edits are detected. */
+  origPrice: number | null;
+  /** Whether the row carries its own cost/price (vs inheriting the product default). */
+  hasOwnCost: boolean;
+  hasOwnPrice: boolean;
 }
 
 export default function ProductsPage() {
@@ -144,6 +149,11 @@ export default function ProductsPage() {
   const [recountReason, setRecountReason] = useState<RecountReason | ''>('');
   const [recountReasonOther, setRecountReasonOther] = useState('');
   const [editNotes, setEditNotes] = useState('');
+  // Edit Details mode: the value the product-level cost field opened with, so a
+  // changed default cost (which revalues stock) is detected and requires a
+  // reason instead of being silently re-sent as a no-op.
+  const [origProductCost, setOrigProductCost] = useState(0);
+  const [costReason, setCostReason] = useState('');
 
   // Category management
   const [catOpen, setCatOpen] = useState(false);
@@ -336,20 +346,25 @@ export default function ProductsPage() {
     const isSimple = active.length === 1 && active[0].isDefault && active[0].label === 'Standard';
     const defaultVariant = isSimple ? active[0] : undefined;
 
+    // A plain product keeps a single price/cost on screen — fold the default
+    // variant's effective values onto the product-level fields so they are not
+    // editable in two places.
+    const foldedPrice = defaultVariant ? String(defaultVariant.sellingPrice ?? product.basePrice) : product.basePrice ? String(product.basePrice) : '';
+    const foldedCost = defaultVariant ? String(defaultVariant.costPrice ?? product.costPrice) : product.costPrice ? String(product.costPrice) : '';
     setEditForm({
       name: product.name,
       description: product.description ?? '',
-      // A plain product keeps a single source of truth on the product row — fold
-      // any legacy per-variant price back onto the product so its price is not
-      // editable in two places. Its own values are shown verbatim (including 0)
-      // so a stored price is never presented as blank.
-      basePrice: defaultVariant ? String(defaultVariant.sellingPrice ?? product.basePrice) : product.basePrice ? String(product.basePrice) : '',
-      costPrice: defaultVariant ? String(defaultVariant.costPrice ?? product.costPrice) : product.costPrice ? String(product.costPrice) : '',
+      // Its own values are shown verbatim (including 0) so a stored price is
+      // never presented as blank.
+      basePrice: foldedPrice,
+      costPrice: foldedCost,
       categoryId: product.category?.id ?? '',
       optionNames: product.optionNames ?? '',
       openingQuantity: '',
       openingLocationId: '',
     });
+    setOrigProductCost(Number(foldedCost || 0));
+    setCostReason('');
     setEditVariants(
       product.variants.map((v) => {
         const pricedOnProduct = isSimple && v.id === defaultVariant?.id;
@@ -371,7 +386,12 @@ export default function ProductsPage() {
           locationId: locations[0]?.id ?? '',
           onHand: (v.stock ?? []).reduce((s, r) => s + r.onHand, 0),
           stock: (v.stock ?? []).map((row) => ({ ...row })),
-          origCost: v.costPrice,
+          // Effective cost when the editor opened (own, else the product
+          // default) so a typed change vs. the displayed value is detected.
+          origCost: v.costPrice ?? (product.costPrice > 0 ? product.costPrice : null),
+          origPrice: v.sellingPrice ?? (product.basePrice > 0 ? product.basePrice : null),
+          hasOwnCost: v.costPrice != null,
+          hasOwnPrice: v.sellingPrice != null,
         };
       }),
     );
@@ -488,6 +508,28 @@ export default function ProductsPage() {
         toast.push('error', 'A plain product needs a selling price greater than 0.');
         return;
       }
+      if (showProductPrices && !(Number(editForm.costPrice) > 0)) {
+        toast.push('error', 'A plain product needs a cost greater than 0.');
+        return;
+      }
+      for (const v of editVariants) {
+        if (!v.isNew && v.cost.trim() !== '' && !(Number(v.cost) > 0)) {
+          toast.push('error', `Cost for ${v.label || 'variant'} must be greater than 0.`);
+          return;
+        }
+      }
+      // Cost changes revalue stock on hand, so they need stock.adjust and are
+      // audited with a reason (enforced again server-side).
+      if (editDetailsCostChanged()) {
+        if (!can('stock.adjust')) {
+          toast.push('error', "You don't have permission to change costs (they revalue stock on hand).");
+          return;
+        }
+        if (!costReason.trim()) {
+          toast.push('error', 'A reason is required for cost changes (they revalue stock on hand).');
+          return;
+        }
+      }
       // No stock confirmation needed for details-only edits
     }
 
@@ -556,6 +598,13 @@ export default function ProductsPage() {
         // fresh variant prices — otherwise the "needs a selling price > 0" check
         // runs against the variants' stale (inherited) values.
         if (variantsEditable) {
+          // Plain product with the change typed on the product-level fields: if
+          // the default variant carries its OWN cost/price (it does after Add
+          // New Stock), the effective value at runtime is the variant's — so the
+          // folded edit must be routed to the variant row, not the product row.
+          const defaultRow = showProductPrices ? editVariants.find((v) => v.isActive && !v.isNew) : undefined;
+          const routeToVariant =
+            defaultRow && (defaultRow.hasOwnCost || defaultRow.hasOwnPrice) ? defaultRow : undefined;
           for (const v of editVariants) {
             const payload: Record<string, unknown> = {
               label: v.label,
@@ -566,6 +615,34 @@ export default function ProductsPage() {
             // Selling price is only updated in edit_details mode if not on product row
             if (!showProductPrices && v.price !== '') {
               payload.sellingPrice = Number(v.price);
+            }
+            // A typed cost change revalues the variant's stock on hand (the
+            // server writes a revaluation ledger row). Unchanged or blank costs
+            // are not re-sent, so no no-op revaluation is recorded. In
+            // showProductPrices mode the default row's (disabled) cost input
+            // mirrors the product-level field, so its change is routed by the
+            // routeToVariant branch below — or, when the variant inherits the
+            // default, by the product PATCH — never by this generic condition.
+            const skipGenericCost = showProductPrices && v === routeToVariant;
+            const costNum = Number(v.cost);
+            if (!v.isNew && !skipGenericCost && v.cost.trim() !== '' && costNum > 0 && costNum !== v.origCost) {
+              payload.costPrice = costNum;
+              payload.reason = costReason.trim();
+            }
+            // The folded product-level edit lands on the owning variant row —
+            // but only when that row carries its own values (otherwise it still
+            // inherits the default, and the product PATCH below keeps it that
+            // way so future variants inherit the corrected default too).
+            if (v === routeToVariant && (v.hasOwnCost || v.hasOwnPrice)) {
+              const foldedCostNum = Number(editForm.costPrice);
+              if (foldedCostNum > 0 && foldedCostNum !== v.origCost) {
+                payload.costPrice = foldedCostNum;
+                payload.reason = costReason.trim();
+              }
+              const foldedPriceNum = Number(editForm.basePrice);
+              if (foldedPriceNum > 0 && foldedPriceNum !== v.origPrice) {
+                payload.sellingPrice = foldedPriceNum;
+              }
             }
             if (v.isNew) {
               if (!can('variant.create')) continue;
@@ -592,14 +669,36 @@ export default function ProductsPage() {
         // variant product clears the (now hidden) product-level defaults.
         const detailRows = editVariants.filter((v) => v.isActive || v.isNew);
         const allSelfPriced = detailRows.every((v) => Number(v.price) > 0 && Number(v.cost) > 0);
+        // The product default cost only travels when the user actually changed
+        // it — except for a plain product whose default variant carries its own
+        // values (routeToVariant above): there the folded edit already went to
+        // the variant, and re-sending it on the product row would write a no-op
+        // revaluation against a value the variant no longer uses.
+        const routeToVariant = showProductPrices ? editVariants.find((v) => v.isActive && !v.isNew) : undefined;
+        const foldedGoesToVariant = !!(routeToVariant && (routeToVariant.hasOwnCost || routeToVariant.hasOwnPrice));
+        const productCostChanged =
+          writeProductPrices && !foldedGoesToVariant && Number(editForm.costPrice) > 0 && Number(editForm.costPrice) !== origProductCost;
         // Update product metadata
         await api.patch(`/api/products/${editing.id}`, {
           name: editForm.name,
           description: editForm.description || null,
-          basePrice: writeProductPrices ? Number(editForm.basePrice || 0) : allSelfPriced ? 0 : editing.basePrice,
-          costPrice: writeProductPrices ? Number(editForm.costPrice || 0) : allSelfPriced ? 0 : editing.costPrice,
+          // When the folded edit went to the default variant row, the product
+          // row keeps its old values — the variant owns the effective ones.
+          basePrice: writeProductPrices && !foldedGoesToVariant
+            ? Number(editForm.basePrice || 0)
+            : allSelfPriced
+              ? 0
+              : editing.basePrice,
+          costPrice: productCostChanged
+            ? Number(editForm.costPrice)
+            : writeProductPrices && !foldedGoesToVariant
+              ? editing.costPrice
+              : allSelfPriced
+                ? 0
+                : editing.costPrice,
           categoryId: editForm.categoryId || null,
           optionNames: newOptionNames,
+          ...(productCostChanged ? { reason: costReason.trim() } : {}),
         });
       }
 
@@ -617,6 +716,7 @@ export default function ProductsPage() {
       setRecountReason('');
       setRecountReasonOther('');
       setEditNotes('');
+      setCostReason('');
       await load();
     } catch (err) {
       toast.push('error', errorMessage(err));
@@ -648,6 +748,9 @@ export default function ProductsPage() {
           onHand: 0,
           stock: [],
           origCost: null,
+          origPrice: null,
+          hasOwnCost: false,
+          hasOwnPrice: false,
         },
       ];
       // Turning a plain product into a variant product: the default 'Standard'
@@ -776,6 +879,20 @@ export default function ProductsPage() {
   const countKey = (variantId: string, locationId: string) => `${variantId}:${locationId}`;
 
   const variantsEditable = can('variant.update') || can('variant.create');
+
+  // Edit Details mode: did the user change any cost (the product default or a
+  // variant's own)? Cost changes revalue stock on hand, so they need the
+  // stock.adjust permission and an audit reason before anything is sent.
+  const editDetailsCostChanged = () => {
+    if ((showProductPrices || !variantsEditable) && Number(editForm.costPrice) > 0 && Number(editForm.costPrice) !== origProductCost) {
+      return true;
+    }
+    return editVariants.some((v) => {
+      if (v.isNew || v.cost.trim() === '') return false;
+      const n = Number(v.cost);
+      return n > 0 && n !== v.origCost;
+    });
+  };
 
   // Price shown in the table: the single effective price for a plain product, or
   // a min–max range across active variants once there are real variants.
@@ -1632,6 +1749,26 @@ export default function ProductsPage() {
                   )}
                 </Field>
               )}
+              {showProductPrices && (
+                <Field label="Default cost price" hint="Used to value stock. Changing it revalues current stock on hand.">
+                  <input
+                    className="input"
+                    inputMode="decimal"
+                    type="number"
+                    value={editForm.costPrice}
+                    placeholder="0"
+                    onChange={(e) => setEditForm({ ...editForm, costPrice: e.target.value })}
+                  />
+                  {!(Number(editForm.costPrice) > 0) && (
+                    <p className="mt-1 text-xs text-red-500">Cost must be greater than 0.</p>
+                  )}
+                  {Number(editForm.costPrice) > 0 && Number(editForm.costPrice) !== origProductCost && (
+                    <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                      Saving will revalue all stock on hand at this cost. A reason is required.
+                    </p>
+                  )}
+                </Field>
+              )}
               <Field label="Description" className="sm:col-span-2">
                 <textarea
                   className="input"
@@ -1648,7 +1785,18 @@ export default function ProductsPage() {
                 />
               </Field>
             </div>
-            {/* Variant metadata (read-only cost) */}
+            {/* Cost changes revalue stock on hand, so they are audited with a reason. */}
+            {editDetailsCostChanged() && (
+              <Field label="Reason for cost change" hint="Required — recorded on the stock ledger together with the revaluation.">
+                <input
+                  className="input"
+                  value={costReason}
+                  placeholder="e.g. Supplier invoice correction"
+                  onChange={(e) => setCostReason(e.target.value)}
+                />
+              </Field>
+            )}
+            {/* Variant details */}
             {can('variant.update') || can('variant.create') ? (
               <div>
                 <p className="label mb-2">Variant details</p>
@@ -1684,7 +1832,16 @@ export default function ProductsPage() {
                             onChange={(e) => setVariant(v.id, { price: e.target.value })}
                           />
                         </Field>
-                        <Field label="Cost" hint={v.isNew ? 'Leave blank to use the product default.' : 'Read-only in this mode.'}>
+                        <Field
+                          label="Cost"
+                          hint={
+                            v.isNew
+                              ? 'Leave blank to use the product default.'
+                              : showProductPrices
+                                ? 'Owned by the product default cost above.'
+                                : 'Changing it revalues current stock on hand.'
+                          }
+                        >
                           {v.isNew ? (
                             <input
                               className="input"
@@ -1696,12 +1853,18 @@ export default function ProductsPage() {
                             />
                           ) : (
                             <input
-                              className="input bg-ink-50 dark:bg-ink-800/50"
-                              type="text"
-                              value={showProductPrices ? editForm.costPrice : v.cost || ''}
-                              disabled
-                              readOnly
+                              className={`input ${showProductPrices ? 'bg-ink-50 dark:bg-ink-800/50' : ''}`}
+                              type="number"
+                              inputMode="decimal"
+                              value={showProductPrices ? editForm.costPrice : v.cost}
+                              placeholder="0"
+                              disabled={showProductPrices}
+                              readOnly={showProductPrices}
+                              onChange={(e) => setVariant(v.id, { cost: e.target.value })}
                             />
+                          )}
+                          {!v.isNew && !showProductPrices && v.cost.trim() !== '' && !(Number(v.cost) > 0) && (
+                            <p className="mt-1 text-xs text-red-500">Must be &gt; 0.</p>
                           )}
                         </Field>
                       </div>
