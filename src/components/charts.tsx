@@ -38,59 +38,167 @@ export interface BarSeriesPoint {
   color: ChartColor;
 }
 
+/** Fixed width of the y-axis tick columns on both sides of the plot. */
+const AXIS_W = 'w-12';
+const LABEL_SPACE = 14; // px reserved above each bar for its value label
+
 /**
- * Vertical grouped bars, one group per bucket (e.g. one per day).
- * `format` is used in hover titles only; values are scaled against the series max.
+ * Vertical grouped bars, one group per bucket (e.g. one per day), drawn on a
+ * shared scale with horizontal gridlines and tick labels on both sides —
+ * styled after a classic "weekly report" poster chart. A formatted value is
+ * printed above every bar; `format` is used for hover tooltips only.
  */
 export function Bars({
   data,
   format,
-  height = 200,
+  height = 220,
   legend,
   empty = 'No data to chart.',
+  showValueLabels = true,
 }: {
   data: { label: string; values: BarSeriesPoint[] }[];
   format?: (value: number) => string;
   height?: number;
   legend?: { name: string; color: ChartColor }[];
   empty?: string;
+  /** Turn off the number printed above each bar (handy when bars are very dense). */
+  showValueLabels?: boolean;
 }) {
   if (!data.length) return <p className="muted py-6 text-center">{empty}</p>;
-  const labelSpace = 22;
-  const zone = Math.max(40, height - labelSpace);
+
+  const fmt = format ?? ((v: number) => String(v));
+  const flat = data.flatMap((bucket) => bucket.values);
+  const seriesMax = Math.max(1, ...flat.map((v) => Math.max(0, v.value)));
+  const { max, steps } = niceAxis(seriesMax);
+  const plotHeight = Math.max(100, height - 26); // 26px for the x-axis labels
+  const gridRows = Array.from({ length: steps + 1 }, (_, i) => max - (i * max) / steps); // top → bottom
+  const ticks = gridRows.map((t) => compactTick(t));
+
   return (
     <div className="space-y-3">
       {legend && legend.length > 0 && <ChartLegend items={legend} />}
-      <div className="flex gap-2 overflow-x-auto pb-1" style={{ height }}>
-        {data.map((bucket) => {
-          const values = bucket.values.map((v) => ({ ...v, value: Math.max(0, v.value) }));
-          const max = Math.max(1, ...values.map((v) => v.value));
-          return (
-            <div key={bucket.label} className="flex min-w-[2.25rem] flex-1 flex-col justify-end">
-              <div className="flex flex-1 items-end justify-center gap-1">
-                {values.map((point) => (
+      <div className="overflow-x-auto pb-1">
+        {/* Everything shares one scrolling box so axes, bars and labels stay aligned. */}
+        <div className="flex min-w-full items-start" style={{ width: 'max-content' }}>
+          <TickAxis ticks={ticks} side="left" height={plotHeight} />
+          <div className="min-w-0 flex-1">
+            <div className="relative" style={{ height: plotHeight }}>
+              <div className="absolute inset-0 flex flex-col justify-between" aria-hidden="true">
+                {gridRows.map((_, i) => (
                   <div
-                    key={point.key}
-                    title={`${bucket.label} · ${point.name}: ${format ? format(point.value) : point.value}`}
-                    className={`w-2.5 rounded-t sm:w-3 ${CHART_BG[point.color]}`}
-                    style={{ height: `${Math.max(2, (point.value / max) * (zone - 14))}px` }}
+                    key={i}
+                    className={`h-px w-full ${i === steps ? 'bg-ink-300 dark:bg-ink-600' : 'bg-ink-200/70 dark:bg-ink-700/70'}`}
                   />
                 ))}
               </div>
-              <p className="mt-1 truncate text-center text-[10px] text-ink-400 dark:text-ink-500" title={bucket.label}>
-                {bucket.label}
-              </p>
+              <div className="relative flex h-full items-end">
+                {data.map((bucket) => (
+                  <div key={bucket.label} className="flex h-full min-w-[2.25rem] flex-1 items-end justify-center gap-1 px-1">
+                    {bucket.values.map((point) => {
+                      const value = Math.max(0, point.value);
+                      const barHeight = Math.max(2, (value / max) * (plotHeight - (showValueLabels ? LABEL_SPACE : 0)));
+                      return (
+                        <div
+                          key={point.key}
+                          title={`${bucket.label} · ${point.name}: ${fmt(point.value)}`}
+                          className="flex h-full w-full max-w-[2.5rem] flex-col items-center justify-end"
+                        >
+                          {showValueLabels && (
+                            <span
+                              className="mb-0.5 text-[10px] font-semibold leading-none tabular-nums text-ink-700 dark:text-ink-300"
+                              style={{ visibility: value / max < 0.06 ? 'hidden' : undefined }}
+                            >
+                              {compactTick(value)}
+                            </span>
+                          )}
+                          <div className={`w-full ${CHART_BG[point.color]}`} style={{ height: `${barHeight}px` }} />
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
             </div>
-          );
-        })}
+            {/* X-axis labels sit on the baseline, one per bucket, same flex math as the bars. */}
+            <div className="flex">
+              {data.map((bucket) => (
+                <p
+                  key={bucket.label}
+                  className="min-w-[2.25rem] flex-1 truncate px-1 text-center text-xs font-semibold text-ink-800 dark:text-ink-200"
+                  title={bucket.label}
+                >
+                  {bucket.label}
+                </p>
+              ))}
+            </div>
+          </div>
+          <TickAxis ticks={ticks} side="right" height={plotHeight} />
+        </div>
       </div>
     </div>
   );
 }
 
 /**
+ * Mirror-image y-axis tick column ("200 / 150 / 100 / 50" on both sides, like
+ * the poster layout). `side` decides which edge the numbers hug.
+ */
+function TickAxis({ ticks, side, height }: { ticks: string[]; side: 'left' | 'right'; height: number }) {
+  return (
+    <div
+      className={`flex shrink-0 flex-col justify-between ${AXIS_W} ${
+        side === 'left' ? 'items-end pr-2 text-right' : 'items-start pl-2'
+      } text-[10px] leading-none tabular-nums text-ink-400 dark:text-ink-500`}
+      style={{ height }}
+      aria-hidden="true"
+    >
+      {ticks.map((tick, i) => (
+        <span key={i} className="tabular-nums" style={{ transform: 'translateY(-50%)' }}>
+          {tick}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Pick a tidy axis maximum: a "nice" step (1/2/2.5/5 × 10^k) times a step
+ * count of 3–6, choosing the tightest fit above the series max so bars use
+ * most of the plot (e.g. series max 209 → axis 250 with 5 steps).
+ */
+export function niceAxis(seriesMax: number): { max: number; steps: number } {
+  let best = { max: Number.POSITIVE_INFINITY, steps: 4 };
+  for (const steps of [3, 4, 5, 6]) {
+    const rough = (seriesMax * 1.05) / steps;
+    const magnitude = Math.pow(10, Math.floor(Math.log10(Math.max(rough, 1))));
+    const candidates = [1, 2, 2.5, 5, 10].map((m) => m * magnitude);
+    const step = candidates.find((c) => c >= rough) ?? magnitude * 10;
+    const max = step * steps;
+    if (max < best.max) best = { max, steps };
+  }
+  return best;
+}
+
+/** Short label for axis ticks and bar value labels: 1500 → "1.5k", 209 → "209". */
+export function compactTick(value: number): string {
+  if (!Number.isFinite(value)) return '—';
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000) return `${trimZero(value / 1_000_000)}M`;
+  if (abs >= 10_000) return `${trimZero(value / 1_000)}k`;
+  if (abs >= 1_000) return value % 1_000 === 0 ? `${value / 1_000}k` : trimZero(value);
+  return trimZero(value);
+}
+
+function trimZero(value: number): string {
+  const rounded = Math.round(value * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
+/**
  * Horizontal proportion bars (a labelled track per item) — good for top-N
- * lists like best sellers, profit by location, or value by location.
+ * lists like best sellers, profit by location, or value by location. Formatted
+ * values sit right-aligned on the same row as the label, so every row reads
+ * like `Label ……… value` with the filled track underneath.
  */
 export function HBarList({
   items,

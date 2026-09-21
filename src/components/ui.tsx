@@ -1,6 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
+import { compactTick, niceAxis } from '@/components/charts';
 import { currency, formatDate } from '@/lib/utils';
 
 export function Card({
@@ -203,20 +204,85 @@ export function Modal({
   );
 }
 
+/**
+ * Dashboard mini bar chart (last 7 days revenue) — same visual language as the
+ * report `Bars` chart: shared scale, gridlines, tick labels on both sides,
+ * value label above each bar and bold weekday labels on the baseline.
+ */
 export function Sparkline({ data }: { data: { date: string; revenue: number }[] }) {
-  const max = Math.max(1, ...data.map((d) => d.revenue));
+  if (!data.length) return <p className="muted py-6 text-center">No data to chart.</p>;
+
+  const { max, steps } = niceAxis(Math.max(1, ...data.map((d) => Math.max(0, d.revenue))));
+  const plotHeight = 150;
+  const gridRows = Array.from({ length: steps + 1 }, (_, i) => max - (i * max) / steps); // top → bottom
+
   return (
-    <div className="flex h-16 items-end gap-1.5">
-      {data.map((point) => (
-        <div key={point.date} className="group relative flex flex-1 flex-col items-center gap-1">
-          <div
-            className="w-full rounded-t bg-sky-500/85 transition group-hover:bg-sky-600 dark:bg-sky-400 dark:group-hover:bg-sky-300"
-            style={{ height: `${Math.max(4, (point.revenue / max) * 56)}px` }}
-            title={`${point.date}: ${currency(point.revenue)}`}
-          />
-          <span className="text-[10px] text-ink-400 dark:text-ink-500">{point.date.slice(5)}</span>
+    <div className="overflow-x-auto">
+      <div className="flex min-w-full" style={{ width: 'max-content' }}>
+        <div
+          className="flex shrink-0 flex-col items-end justify-between pr-2 text-right text-[10px] tabular-nums text-ink-400 dark:text-ink-500"
+          style={{ height: plotHeight }}
+          aria-hidden="true"
+        >
+          {gridRows.map((tick, i) => (
+            <span key={i} className="leading-none" style={{ transform: 'translateY(-50%)' }}>
+              {compactTick(tick)}
+            </span>
+          ))}
         </div>
-      ))}
+        <div className="relative" style={{ height: plotHeight }}>
+          <div className="absolute inset-0 flex flex-col justify-between" aria-hidden="true">
+            {gridRows.map((_, i) => (
+              <div key={i} className={`h-px w-full ${i === steps ? 'bg-ink-300 dark:bg-ink-600' : 'bg-ink-200/70 dark:bg-ink-700/70'}`} />
+            ))}
+          </div>
+          <div className="relative flex h-full items-end justify-around gap-2 px-2">
+            {data.map((point) => (
+              <div key={point.date} className="group flex h-full min-w-[2.5rem] flex-1 flex-col items-center justify-end">
+                <span
+                  className="mb-0.5 text-[10px] font-semibold tabular-nums text-ink-700 dark:text-ink-300"
+                  style={{ visibility: point.revenue / max < 0.06 ? 'hidden' : undefined }}
+                >
+                  {compactTick(point.revenue)}
+                </span>
+                <div
+                  className="w-full max-w-[2.75rem] bg-sky-500/85 transition group-hover:bg-sky-600 dark:bg-sky-400 dark:group-hover:bg-sky-300"
+                  style={{ height: `${Math.max(2, (point.revenue / max) * (plotHeight - 14))}px` }}
+                  title={`${point.date}: ${currency(point.revenue)}`}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+        <div
+          className="flex shrink-0 flex-col items-start justify-between pl-2 text-[10px] tabular-nums text-ink-400 dark:text-ink-500"
+          style={{ height: plotHeight }}
+          aria-hidden="true"
+        >
+          {gridRows.map((tick, i) => (
+            <span key={i} className="leading-none" style={{ transform: 'translateY(-50%)' }}>
+              {compactTick(tick)}
+            </span>
+          ))}
+        </div>
+      </div>
+      <div className="flex">
+        <div className="w-3 shrink-0" aria-hidden="true" />
+        <div className="flex min-w-0 flex-1">
+          {data.map((point) => (
+            <p key={point.date} className="min-w-[2.5rem] flex-1 truncate text-center text-xs font-semibold text-ink-800 dark:text-ink-200" title={point.date}>
+              {weekdayLabel(point.date)}
+            </p>
+          ))}
+          <div className="w-3 shrink-0" aria-hidden="true" />
+        </div>
+      </div>
     </div>
   );
+}
+
+/** "2026-09-21" → "Mon" so the dashboard chart reads like a weekly report. */
+function weekdayLabel(date: string): string {
+  const parsed = new Date(`${date}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? date.slice(5) : parsed.toLocaleDateString('en-GB', { weekday: 'short' });
 }
