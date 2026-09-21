@@ -8,7 +8,7 @@ import type { ReactNode } from 'react';
 // mode and print cleanly via the report print stylesheet.
 // ---------------------------------------------------------------------------
 
-export type ChartColor = 'sky' | 'emerald' | 'amber' | 'violet' | 'rose';
+export type ChartColor = 'sky' | 'emerald' | 'amber' | 'violet' | 'rose' | 'slate';
 
 const CHART_BG: Record<ChartColor, string> = {
   sky: 'bg-sky-500 dark:bg-sky-400',
@@ -16,6 +16,7 @@ const CHART_BG: Record<ChartColor, string> = {
   amber: 'bg-amber-500 dark:bg-amber-400',
   violet: 'bg-violet-500 dark:bg-violet-400',
   rose: 'bg-rose-500 dark:bg-rose-400',
+  slate: 'bg-slate-500 dark:bg-slate-400',
 };
 
 export function ChartLegend({ items }: { items: { name: string; color: ChartColor }[] }) {

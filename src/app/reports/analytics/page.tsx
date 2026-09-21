@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { PageHeader } from '@/components/shell';
 import { ExportButtons, money, pctText } from '@/components/report-tools';
+import { Bars } from '@/components/charts';
 import { Badge, Card, Empty, Kpi, TableWrap } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import { api, errorMessage } from '@/lib/client';
@@ -252,6 +253,59 @@ export default function AnalyticsReportPage() {
             <Kpi label="B-class items" value={data.abc.totals.countB} hint={`${currency(data.abc.totals.valueB)} value`} />
             <Kpi label="C-class items" value={data.abc.totals.countC} hint={`${currency(data.abc.totals.valueC)} value · long tail`} />
           </div>
+
+          {abc.length > 0 && (
+            <Card title="ABC class distribution" subtitle="Sales value and item count per class — the Pareto shape of your sales">
+              <div className="grid gap-6 lg:grid-cols-2">
+                <div>
+                  <p className="label">Sales value by class</p>
+                  <Bars
+                    height={220}
+                    data={[
+                      {
+                        label: 'A',
+                        values: [{ key: 'a-value', name: 'Sales value', value: data.abc.totals.valueA, color: 'sky' }],
+                      },
+                      {
+                        label: 'B',
+                        values: [{ key: 'b-value', name: 'Sales value', value: data.abc.totals.valueB, color: 'sky' }],
+                      },
+                      {
+                        label: 'C',
+                        values: [{ key: 'c-value', name: 'Sales value', value: data.abc.totals.valueC, color: 'sky' }],
+                      },
+                    ]}
+                    format={(v) => currency(v)}
+                  />
+                </div>
+                <div>
+                  <p className="label">Items per class</p>
+                  <Bars
+                    height={220}
+                    data={[
+                      {
+                        label: 'A',
+                        values: [{ key: 'a-count', name: 'Items', value: data.abc.totals.countA, color: 'violet' }],
+                      },
+                      {
+                        label: 'B',
+                        values: [{ key: 'b-count', name: 'Items', value: data.abc.totals.countB, color: 'violet' }],
+                      },
+                      {
+                        label: 'C',
+                        values: [{ key: 'c-count', name: 'Items', value: data.abc.totals.countC, color: 'violet' }],
+                      },
+                    ]}
+                    format={(v) => `${v} item(s)`}
+                  />
+                </div>
+              </div>
+              <p className="muted mt-3 text-xs">
+                A ≈ top 80% of sales value, B ≈ next 15%, C ≈ the tail. A healthy distribution shows a
+                few A-class bars carrying most of the value with many C-class lines behind them.
+              </p>
+            </Card>
+          )}
 
           <Card>
             {abc.length === 0 ? (
