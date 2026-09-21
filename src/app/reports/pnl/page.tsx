@@ -19,6 +19,9 @@ interface Report {
   damagedWriteOff: number;
   shrinkage: number;
   shrinkageByReason: { reason: string; units: number; value: number }[];
+  expenses: number;
+  expensesByCategory: { category: string; total: number; count: number }[];
+  operatingProfit: number;
   netProfit: number;
   netMargin: number;
   transactions: number;
@@ -83,8 +86,15 @@ export default function PnlReportPage() {
                         ['Refunds on returns', money(-data.refunds)],
                         ['Damaged write-offs', money(-data.damagedWriteOff)],
                         ['Stock shrinkage (adjustments)', money(-data.shrinkage)],
+                        ['Operating profit', money(data.operatingProfit)],
+                        ['Operating expenses', money(-data.expenses)],
                         ['Net profit', money(data.netProfit)],
                       ],
+                    },
+                    {
+                      title: 'Operating expenses by category',
+                      headers: ['Category', 'Expenses', 'Total'],
+                      rows: data.expensesByCategory.map((row) => [row.category, String(row.count), money(row.total)]),
                     },
                     {
                       title: 'Shrinkage by reason',
@@ -128,6 +138,20 @@ export default function PnlReportPage() {
             </Card>
           )}
 
+          {data.expensesByCategory.length > 0 && (
+            <Card title="Operating expenses by category" subtitle="Paid expenses booked in this period — inventory purchases are NOT here (they flow through COGS)">
+              <HBarList
+                items={data.expensesByCategory.map((row) => ({
+                  label: row.category,
+                  value: row.total,
+                  hint: `${row.count} expense(s)`,
+                }))}
+                format={(v) => currency(v)}
+                color="rose"
+              />
+            </Card>
+          )}
+
           <div className="grid gap-5 lg:grid-cols-2">
             <Card title="Statement">
               <div className="text-sm">
@@ -138,11 +162,15 @@ export default function PnlReportPage() {
                 {line('Refunds on returns', -data.refunds)}
                 {line('Damaged write-offs', -data.damagedWriteOff)}
                 {line('Stock shrinkage (adjustments)', -data.shrinkage)}
+                {line('Operating profit', data.operatingProfit, false, true)}
+                {line('Operating expenses', -data.expenses)}
                 {line('Net profit', data.netProfit, false, true)}
               </div>
               <p className="mt-4 text-xs text-ink-500 dark:text-ink-400">
                 Net margin {data.netMargin.toFixed(1)}%. Shrinkage is valued at the FIFO cost of the units actually
-                written off, not at list price.
+                written off, not at list price. Operating expenses are recorded on the{' '}
+                <a className="underline decoration-dotted" href="/expenses">Expenses page</a> and exclude stock
+                purchases — inventory spend only enters this statement as cost of goods sold.
               </p>
             </Card>
 

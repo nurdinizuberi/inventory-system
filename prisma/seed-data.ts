@@ -358,6 +358,34 @@ const SALES: SaleSeed[] = [
   },
 ];
 
+const EXPENSE_CATEGORIES = ['Rent', 'Transport', 'Salaries', 'Utilities', 'Internet & Phone', 'Marketing', 'Supplies', 'Bank Charges'];
+
+interface ExpenseSeed {
+  category: string;
+  daysAgo: number;
+  hour: number;
+  amount: number;
+  method: string;
+  payee: string;
+  reference?: string;
+  description: string;
+  status?: 'paid' | 'draft' | 'cancelled';
+}
+
+const EXPENSES: ExpenseSeed[] = [
+  { category: 'Rent', daysAgo: 20, hour: 9, amount: 500_000, method: 'bank_transfer', payee: 'Mbezi Beach Property Ltd', reference: 'RENT-SEP', description: 'Store rent — September' },
+  { category: 'Salaries', daysAgo: 18, hour: 10, amount: 1_800_000, method: 'bank_transfer', payee: 'Payroll', reference: 'PAY-SEP', description: 'Staff salaries — September' },
+  { category: 'Transport', daysAgo: 2, hour: 11, amount: 100_000, method: 'cash', payee: 'ABC Transport', description: 'Delivery of products from warehouse' },
+  { category: 'Internet & Phone', daysAgo: 3, hour: 8, amount: 50_000, method: 'mobile_money', payee: 'Vodacom TZ', description: 'Fibre + airtime' },
+  { category: 'Utilities', daysAgo: 5, hour: 12, amount: 85_000, method: 'mobile_money', payee: 'TANESCO', description: 'Electricity — store + warehouse' },
+  { category: 'Supplies', daysAgo: 1, hour: 14, amount: 45_000, method: 'cash', payee: 'Kariakoo Stationers', description: 'Receipt rolls, carrier bags' },
+  { category: 'Marketing', daysAgo: 8, hour: 15, amount: 150_000, method: 'card', payee: 'Meta Ads', description: 'Instagram promotion' },
+  { category: 'Bank Charges', daysAgo: 9, hour: 9, amount: 12_500, method: 'bank_transfer', payee: 'CRDB Bank', description: 'Monthly account fees' },
+  { category: 'Transport', daysAgo: 0, hour: 10, amount: 25_000, method: 'cash', payee: 'Bodaboda', description: 'Same-day stock run' },
+  // A draft sits outside the P&L until a manager marks it paid.
+  { category: 'Marketing', daysAgo: 0, hour: 11, amount: 300_000, method: 'card', payee: 'Radio One', description: 'Radio spot — pending approval', status: 'draft' },
+];
+
 const RETURNS = [
   {
     number: 'RT-0001',
@@ -1155,6 +1183,52 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       },
     },
   });
+
+  // ---- expense categories + operating expenses ---------------------------
+  const expenseCategoryMap: Record<string, { id: string }> = {};
+  for (const name of EXPENSE_CATEGORIES) {
+    const category = await prisma.expenseCategory.create({
+      data: {
+        tenantId,
+        name,
+        slug: name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''),
+      },
+    });
+    expenseCategoryMap[name] = { id: category.id };
+  }
+
+  let expenseSeq = 0;
+  for (const e of EXPENSES) {
+    expenseSeq += 1;
+    const number = `EXP-${String(expenseSeq).padStart(4, '0')}`;
+    const paid = (e.status ?? 'paid') === 'paid';
+    const created = await prisma.expense.create({
+      data: {
+        tenantId,
+        number,
+        categoryId: expenseCategoryMap[e.category].id,
+        amount: e.amount,
+        status: e.status ?? 'paid',
+        expenseDate: at(e.daysAgo, e.hour),
+        paymentMethod: e.method,
+        payee: e.payee,
+        description: e.description,
+        createdById: admin.id,
+        ...(paid ? { approvedById: admin.id, approvedAt: at(e.daysAgo, e.hour) } : {}),
+      },
+    });
+    await log({
+      action: 'create',
+      entityType: 'Expense',
+      entityId: created.id,
+      entityLabel: number,
+      userEmail: admin.email,
+      userRole: admin.role,
+      userId: admin.id,
+      after: { number, amount: e.amount, category: e.category, status: e.status ?? 'paid' },
+      createdAt: at(e.daysAgo, e.hour),
+    });
+  }
 
   await log({
     action: 'login',

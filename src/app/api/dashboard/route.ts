@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db';
 import { guard, jsonError, scopedLocationIds } from '@/lib/rbac';
 import { getStockMatrix } from '@/lib/stock';
 import { daysAgo, round2, todayStart } from '@/lib/utils';
+import { computeNetProfit } from '@/lib/expense-service';
 
 /** Dashboard KPIs + low-stock alerts + recent ledger activity. */
 export async function GET() {
@@ -24,11 +25,17 @@ export async function GET() {
     const effective = scope ?? (ctx.tenantId ? locationIds : null);
     const inEffective = effective ? { locationId: { in: effective } } : {};
 
-    const [salesToday, sales7, pendingAdjustments, inTransit, drafts, expiringSoon] = await Promise.all([
+    const [salesToday, expensesToday, sales7, pendingAdjustments, inTransit, drafts, expiringSoon] = await Promise.all([
       prisma.sale.aggregate({
         where: { status: 'completed', effectiveDate: { gte: todayStart() }, ...inEffective },
         _sum: { total: true, profit: true, totalCost: true },
         _count: true,
+      }),
+      // Operating expenses recorded today (any location). Paid only — drafts
+      // and cancelled expenses never touch the P&L.
+      prisma.expense.aggregate({
+        where: { status: 'paid', expenseDate: { gte: todayStart() }, ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}) },
+        _sum: { amount: true },
       }),
       prisma.sale.findMany({
         where: { status: 'completed', effectiveDate: { gte: daysAgo(7) }, ...inEffective },
@@ -117,6 +124,15 @@ export async function GET() {
       kpis: {
         salesToday: round2(salesToday._sum.total ?? 0),
         profitToday: round2(salesToday._sum.profit ?? 0),
+        // Live net profit for the day: gross trading profit less operating
+        // expenses booked today. Purchases are excluded (they are inventory,
+        // not expense — see /expenses).
+        netProfitToday: computeNetProfit(
+          round2(salesToday._sum.total ?? 0),
+          round2(salesToday._sum.totalCost ?? 0),
+          round2(expensesToday._sum.amount ?? 0),
+        ),
+        expensesToday: round2(expensesToday._sum.amount ?? 0),
         transactionsToday: salesToday._count,
         unitsOnHand,
         inventoryValue,

@@ -88,6 +88,7 @@ export function statusTone(status: string): keyof typeof BADGE_TONES {
     cancelled: 'red',
     rejected: 'red',
     voided: 'red',
+    paid: 'green',
     sold: 'neutral',
     released: 'neutral',
     fulfilled: 'green',

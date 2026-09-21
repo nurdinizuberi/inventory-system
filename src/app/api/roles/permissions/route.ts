@@ -34,6 +34,10 @@ const ACTION_GROUPS: Record<string, { label: string; actions: Action[] }> = {
     label: 'Stock & Reservations',
     actions: ['stock.view', 'stock.adjust', 'stock.adjustApprove', 'reservation.manage'],
   },
+  expenses: {
+    label: 'Expenses',
+    actions: ['expense.view', 'expense.create', 'expense.update', 'expense.delete', 'expense.approve'],
+  },
   reports: {
     label: 'Reports',
     actions: ['report.sales', 'report.stock', 'report.purchases', 'report.transfers', 'report.pnl', 'report.valuation'],
@@ -79,6 +83,11 @@ const ACTION_LABELS: Record<string, string> = {
   'stock.adjust': 'Create stock adjustments',
   'stock.adjustApprove': 'Approve stock adjustments',
   'reservation.manage': 'Manage reservations',
+  'expense.view': 'View expenses',
+  'expense.create': 'Record expenses',
+  'expense.update': 'Edit expenses',
+  'expense.delete': 'Cancel / delete expenses',
+  'expense.approve': 'Approve expenses (mark paid)',
   'report.sales': 'Sales report',
   'report.stock': 'Stock report',
   'report.purchases': 'Purchase history report',

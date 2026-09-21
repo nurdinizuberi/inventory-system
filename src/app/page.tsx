@@ -14,6 +14,8 @@ interface DashboardData {
   kpis: {
     salesToday: number;
     profitToday: number;
+    netProfitToday: number;
+    expensesToday: number;
     transactionsToday: number;
     unitsOnHand: number;
     inventoryValue: number;
@@ -80,10 +82,10 @@ export default function DashboardPage() {
               hint={`${data.kpis.transactionsToday} transaction(s)`}
             />
             <Kpi
-              label="Profit today"
-              value={currency(data.kpis.profitToday)}
-              tone={data.kpis.profitToday >= 0 ? 'good' : 'bad'}
-              hint="Revenue less FIFO cost of goods"
+              label="Net profit today"
+              value={currency(data.kpis.netProfitToday)}
+              tone={data.kpis.netProfitToday >= 0 ? 'good' : 'bad'}
+              hint={`Gross ${currency(data.kpis.profitToday)} · expenses ${currency(data.kpis.expensesToday)}`}
             />
             <Kpi
               label="Inventory value"

@@ -28,6 +28,8 @@ export type Action =
   | 'return.create' | 'return.view'
   // stock
   | 'stock.view' | 'stock.adjust' | 'stock.adjustApprove' | 'reservation.manage'
+  // expenses (operating expenses — separate from stock purchases)
+  | 'expense.view' | 'expense.create' | 'expense.update' | 'expense.delete' | 'expense.approve'
   // reports
   | 'report.sales' | 'report.stock' | 'report.purchases' | 'report.transfers' | 'report.pnl' | 'report.valuation'
   // system
@@ -44,6 +46,7 @@ export const ALL_ACTIONS: Action[] = [
   'sale.create', 'sale.view', 'sale.void', 'sale.ownOnly',
   'return.create', 'return.view',
   'stock.view', 'stock.adjust', 'stock.adjustApprove', 'reservation.manage',
+  'expense.view', 'expense.create', 'expense.update', 'expense.delete', 'expense.approve',
   'report.sales', 'report.stock', 'report.purchases', 'report.transfers', 'report.pnl', 'report.valuation',
   'audit.view',
 ];
@@ -81,6 +84,7 @@ export const SYSTEM_ROLES: SystemRole[] = [
       'purchase.view', 'purchase.create', 'purchase.update', 'purchase.confirm', 'purchase.cancel',
       'transfer.view', 'transfer.create', 'transfer.ship', 'transfer.complete', 'transfer.cancel',
       'stock.view', 'stock.adjust', 'stock.adjustApprove', 'reservation.manage',
+      'expense.view', 'expense.create', 'expense.update', 'expense.approve',
       ...ALL_REPORTS,
     ],
   },
@@ -95,6 +99,7 @@ export const SYSTEM_ROLES: SystemRole[] = [
       'sale.create', 'sale.view', 'sale.void',
       'return.create', 'return.view',
       'stock.view', 'stock.adjust', 'reservation.manage',
+      'expense.view', 'expense.create', 'expense.update',
       'report.sales', 'report.stock', 'report.pnl',
     ],
   },
@@ -137,20 +142,20 @@ const MATRIX: Record<Role, Action[]> = {
     'variant.view', 'variant.create', 'variant.update',
     'location.view', 'supplier.view', 'supplier.manage',
     'purchase.view', 'purchase.create', 'purchase.update', 'purchase.confirm', 'purchase.cancel',
-    'transfer.view', 'transfer.create', 'transfer.ship', 'transfer.complete', 'transfer.cancel',
-    'stock.view', 'stock.adjust', 'stock.adjustApprove', 'reservation.manage',
-    ...ALL_REPORTS,
-  ],
+    'transfer.view', 'transfer.create', 'transfer.ship', 'transfer.complete', 'transfer.cancel',      'stock.view', 'stock.adjust', 'stock.adjustApprove', 'reservation.manage',
+      'expense.view', 'expense.create', 'expense.update', 'expense.approve',
+      ...ALL_REPORTS,
+    ],
 
   STORE_MANAGER: [
     'product.view', 'variant.view',
     'location.view', 'supplier.view',
     'transfer.view', 'transfer.create', 'transfer.complete',
     'sale.create', 'sale.view', 'sale.void',
-    'return.create', 'return.view',
-    'stock.view', 'stock.adjust', 'reservation.manage',
-    'report.sales', 'report.stock', 'report.pnl',
-  ],
+    'return.create', 'return.view',      'stock.view', 'stock.adjust', 'reservation.manage',
+      'expense.view', 'expense.create', 'expense.update',
+      'report.sales', 'report.stock', 'report.pnl',
+    ],
 
   CASHIER: [
     'product.view', 'variant.view', 'location.view',

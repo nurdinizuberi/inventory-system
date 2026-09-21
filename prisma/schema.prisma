@@ -51,6 +51,8 @@ model Tenant {
   reservations Reservation[]
   movements StockMovement[]
   batches   Batch[]
+  expenseCategories ExpenseCategory[]
+  expenses  Expense[]
   auditLogs AuditLog[]
 }
 
@@ -124,6 +126,9 @@ model User {
   reservations      Reservation[]    @relation("ReservationCreatedBy")
   movementsCreated  StockMovement[]  @relation("MovementCreatedBy")
   movementsApproved StockMovement[]  @relation("MovementApprovedBy")
+  expensesCreated   Expense[]        @relation("ExpenseCreatedBy")
+  expensesUpdated   Expense[]        @relation("ExpenseUpdatedBy")
+  expensesApproved  Expense[]        @relation("ExpenseApprovedBy")
 
   @@unique([tenantId, email])
 }
@@ -671,6 +676,72 @@ model StockMovement {
   @@index([batchId])
   @@index([referenceId])
   @@index([createdAt])
+  @@index([tenantId])
+}
+
+// ===========================================================================
+// EXPENSES  --  operating expenses (NOT stock purchases)
+// ===========================================================================
+// Expenses are deliberately separate from Purchases. A purchase moves money
+// into INVENTORY (an asset) and only becomes cost when goods are sold (FIFO
+// COGS in the P&L). An expense is consumed when it is incurred — rent,
+// transport, salaries — so it hits the P&L directly. Keeping them apart is
+// what prevents stock costs from being double-counted.
+
+model ExpenseCategory {
+  id        String   @id @default(cuid())
+  tenantId  String?
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String
+  slug      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  expenses Expense[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId])
+}
+
+model Expense {
+  id          String   @id @default(cuid())
+  tenantId    String?
+  tenant      Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  number      String   // EXP-0001, per-tenant sequence
+  categoryId  String
+  category    ExpenseCategory @relation(fields: [categoryId], references: [id])
+  amount      Float
+  // paid | pending | cancelled — only `paid` expenses hit the P&L
+  status      String   @default("paid")
+  // The day the expense was incurred (not when it was recorded) so reports
+  // can be grouped by day/month/year alongside sales and COGS. Backdating
+  // follows the same pattern as Sale/Purchase/Return.
+  expenseDate      DateTime @default(now())
+  backdateReason   String?
+  isBackdated      Boolean  @default(false)
+  paymentMethod String @default("cash") // cash | card | mobile_money | bank_transfer | credit
+  payee        String?
+  reference    String?
+  description  String?
+  // Receipt / supporting document, stored as a data URL (small images, PDFs).
+  receiptName  String?
+  receiptType  String?
+  receiptData  String?
+  notes        String?
+  createdById String
+  createdBy   User     @relation("ExpenseCreatedBy", fields: [createdById], references: [id])
+  updatedById String?
+  updatedBy   User?    @relation("ExpenseUpdatedBy", fields: [updatedById], references: [id])
+  approvedById String?
+  approvedBy  User?    @relation("ExpenseApprovedBy", fields: [approvedById], references: [id])
+  approvedAt  DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([tenantId, number])
+  @@index([expenseDate])
+  @@index([status])
+  @@index([categoryId])
   @@index([tenantId])
 }
 

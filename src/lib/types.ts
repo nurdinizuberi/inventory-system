@@ -80,6 +80,27 @@ export type SaleStatus = (typeof SALE_STATUSES)[number];
 export const PAYMENT_METHODS = ['cash', 'card', 'mobile_money', 'credit'] as const;
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
 
+// Expenses support one extra tender type beyond the POS list: bank_transfer.
+export const EXPENSE_PAYMENT_METHODS = ['cash', 'card', 'mobile_money', 'bank_transfer', 'credit'] as const;
+export type ExpensePaymentMethod = (typeof EXPENSE_PAYMENT_METHODS)[number];
+
+export const EXPENSE_PAYMENT_METHOD_LABELS: Record<ExpensePaymentMethod, string> = {
+  cash: 'Cash',
+  card: 'Card',
+  mobile_money: 'Mobile Money',
+  bank_transfer: 'Bank Transfer',
+  credit: 'Credit',
+};
+
+export const EXPENSE_STATUSES = ['draft', 'paid', 'cancelled'] as const;
+export type ExpenseStatus = (typeof EXPENSE_STATUSES)[number];
+
+export const EXPENSE_STATUS_LABELS: Record<ExpenseStatus, string> = {
+  draft: 'Draft',
+  paid: 'Paid',
+  cancelled: 'Cancelled',
+};
+
 export const RETURN_CONDITIONS = ['sellable', 'damaged'] as const;
 export type ReturnCondition = (typeof RETURN_CONDITIONS)[number];
 

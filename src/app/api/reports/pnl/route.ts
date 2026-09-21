@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
+import { sumPaidExpenses } from '@/lib/expense-service';
 import { guard, jsonError, scopedLocationIds } from '@/lib/rbac';
 import { daysAgo, round2 } from '@/lib/utils';
 
@@ -7,6 +8,11 @@ import { daysAgo, round2 } from '@/lib/utils';
  * Profit & loss summary. Revenue and COGS come from the sales ledger; write-offs
  * (adjustments, damaged returns) are pulled from the movement ledger at cost so
  * shrinkage shows up in the result rather than hiding in a stock count.
+ *
+ * Operating expenses (the Expense table) are NOT stock costs — purchases only
+ * become COGS when goods are sold via FIFO — so subtracting them here cannot
+ * double-count inventory spend. Only `paid` expenses count; drafts and
+ * cancelled ones are excluded.
  */
 export async function GET(request: Request) {
   try {
@@ -76,7 +82,30 @@ export async function GET(request: Request) {
       Object.values(shrinkageByReason).reduce((s, e) => s - e.value, 0),
     );
 
-    const netProfit = round2(grossProfit - refunds - damagedWriteOff - shrinkage);
+    // Operating expenses booked in the period (rent, transport, salaries...).
+    // Not location-scoped: an expense is a tenant-wide document.
+    const expenses = await prisma.expense.findMany({
+      where: {
+        ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}),
+        status: 'paid',
+        expenseDate: { gte: from, lte: to },
+      },
+      include: { category: true },
+    });
+    const totalExpenses = sumPaidExpenses(expenses);
+    const expensesByCategory = new Map<string, { category: string; total: number; count: number }>();
+    for (const e of expenses) {
+      const entry = expensesByCategory.get(e.categoryId) ?? {
+        category: e.category.name,
+        total: 0,
+        count: 0,
+      };
+      entry.total = round2(entry.total + e.amount);
+      entry.count += 1;
+      expensesByCategory.set(e.categoryId, entry);
+    }
+
+    const netProfit = round2(grossProfit - refunds - damagedWriteOff - shrinkage - totalExpenses);
 
     const byLocation = new Map<string, { location: string; revenue: number; cogs: number; profit: number; margin: number }>();
     for (const sale of sales) {
@@ -115,6 +144,11 @@ export async function GET(request: Request) {
         units: v.units,
         value: round2(v.value),
       })),
+      expenses: totalExpenses,
+      expensesByCategory: [...expensesByCategory.values()]
+        .map((row) => ({ ...row, total: round2(row.total) }))
+        .sort((a, b) => b.total - a.total),
+      operatingProfit: round2(grossProfit - refunds - damagedWriteOff - shrinkage),
       netProfit,
       netMargin: revenue ? round2((netProfit / revenue) * 100) : 0,
       transactions: sales.length,

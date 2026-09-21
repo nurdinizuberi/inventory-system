@@ -299,12 +299,13 @@ src/lib/
   purchase-service.ts  goods receipt
   transfer-service.ts  ship / receive / cancel
   reservation-service.ts  hold / release / fulfil
+  expense-service.ts   operating-expense helpers + Net Profit composition
   admin-auth.ts        global admin sessions (portal at /admin)
   types.ts             role slugs, payment methods, shared domain types
 src/app/
   api/...              43 route handlers
   admin/               global admin portal (undiscoverable from the app nav)
-  pos/  sales/  purchases/  transfers/  returns/  adjustments/
+  pos/  sales/  purchases/  transfers/  returns/  adjustments/  expenses/
   products/  locations/  suppliers/  users/  roles/  audit/  stock/
   reports/{sales,stock,purchases,transfers,pnl,valuation}/
 ```
