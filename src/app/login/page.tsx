@@ -14,6 +14,7 @@ export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [pendingActivation, setPendingActivation] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -30,6 +31,9 @@ export default function LoginPage() {
       await login(email, password);
     } catch (err) {
       setError(errorMessage(err));
+      setPendingActivation(
+        err instanceof Error && /not been activated yet/i.test(err.message),
+      );
     } finally {
       setBusy(false);
     }
@@ -82,6 +86,17 @@ export default function LoginPage() {
               <PasswordInput value={password} onChange={setPassword} required />
             </label>
             {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/30 dark:text-red-300">{error}</p>}
+            {pendingActivation && (
+              <p className="text-center text-sm text-ink-600 dark:text-ink-300">
+                Lost the email?{' '}
+                <Link
+                  href={`/forgot-password?email=${encodeURIComponent(email)}`}
+                  className="text-violet-700 hover:underline dark:text-violet-300"
+                >
+                  Resend my activation link
+                </Link>
+              </p>
+            )}
             <button className="btn-primary w-full" disabled={busy} type="submit">
               {busy ? 'Signing in…' : 'Sign in'}
             </button>

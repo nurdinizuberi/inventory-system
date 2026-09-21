@@ -108,6 +108,31 @@ model User {
   emailVerifiedAt            DateTime?
   emailVerificationTokenHash String?
 
+  // ---------------------------------------------------------------------------
+  // Account lifecycle: PENDING -> ACTIVE <-> SUSPENDED.
+  //   PENDING    invited by an admin, has no usable password yet (random hash);
+  //              cannot sign in until the activation link is completed.
+  //   ACTIVE     can sign in (self-activated, or created with a password).
+  //   SUSPENDED  blocked from signing in (was isActive=false before this field).
+  // `isActive` is a derived, backward-compatible mirror of the status
+  // (isActive = status === 'ACTIVE') so every pre-existing auth path — login,
+  // session checks, admin portal — keeps working untouched. ALL writes MUST
+  // keep the two in sync (see src/lib/account.ts).
+  // ---------------------------------------------------------------------------
+  status                     String   @default("ACTIVE")
+  activatedAt                DateTime? // first time the account became ACTIVE
+  phone                      String?
+
+  // Invitation / activation. The invite mints a hashed, expiring token that the
+  // user redeems at /activate to verify their email, fill in personal info and
+  // (for PENDING accounts) set their own password.
+  invitedById                String?
+  invitedBy                  User?    @relation("UserInvitedBy", fields: [invitedById], references: [id], onDelete: SetNull)
+  invitationsSent            User[]   @relation("UserInvitedBy")
+  activationTokenHash        String?
+  activationTokenExpiresAt   DateTime?
+  lastInvitedAt              DateTime?
+
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -131,6 +156,8 @@ model User {
   expensesApproved  Expense[]        @relation("ExpenseApprovedBy")
 
   @@unique([tenantId, email])
+  @@index([status])
+  @@index([invitedById])
 }
 
 // ===========================================================================

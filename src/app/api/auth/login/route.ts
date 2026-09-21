@@ -82,9 +82,34 @@ export async function POST(request: Request) {
     });
   };
 
-  if (!user || !user.isActive) {
+  // Account lifecycle gate, ordered to leak as little as possible:
+  //   * unknown user  -> generic 401
+  //   * PENDING       -> 403 "not activated yet" (guides the invited user to
+  //                      their activation email; the address was already
+  //                      revealed by the invitation itself, so this is not a
+  //                      meaningful enumeration channel)
+  //   * SUSPENDED     -> generic 401, same as unknown (no confirmation the
+  //                      account exists)
+  if (!user) {
     await recordFailure(retryKey);
-    await logAttempt(false, 'unknown or inactive user');
+    await logAttempt(false, 'unknown user');
+    return NextResponse.json({ error: 'Invalid email or password' }, { status: 401 });
+  }
+
+  if (user.status === 'PENDING') {
+    await logAttempt(false, 'account pending activation');
+    return NextResponse.json(
+      {
+        error: 'This account has not been activated yet. Check your inbox for the activation email, or use “Forgot password” to get a new link.',
+        code: 'ACCOUNT_PENDING',
+      },
+      { status: 403 },
+    );
+  }
+
+  if (!user.isActive) {
+    await recordFailure(retryKey);
+    await logAttempt(false, 'inactive or suspended user');
     return NextResponse.json({ error: 'Invalid email or password' }, { status: 401 });
   }
 

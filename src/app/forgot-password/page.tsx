@@ -1,12 +1,22 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { Suspense, useState } from 'react';
 import { ThemeToggle } from '@/components/theme-context';
 import { api, errorMessage } from '@/lib/client';
 
 export default function ForgotPasswordPage() {
-  const [email, setEmail] = useState('');
+  return (
+    <Suspense>
+      <ForgotPasswordForm />
+    </Suspense>
+  );
+}
+
+function ForgotPasswordForm() {
+  const params = useSearchParams();
+  const [email, setEmail] = useState(params.get('email') ?? '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
@@ -41,7 +51,7 @@ export default function ForgotPasswordPage() {
           <div className="card card-pad mt-6">
             {done ? (
               <p className="rounded-lg bg-green-50 px-3 py-2 text-sm text-green-700 dark:bg-green-900/30 dark:text-green-300">
-                If an account with that email exists, a reset link is on its way.
+                If an account with that email exists, a reset or activation link is on its way.
               </p>
             ) : (
               <form className="space-y-4" onSubmit={submit}>

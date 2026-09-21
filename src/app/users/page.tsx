@@ -6,6 +6,7 @@ import { Badge, Card, Empty, Field, Modal, TableWrap } from '@/components/ui';
 import { useAuth } from '@/components/auth-context';
 import { useToast } from '@/components/toast';
 import { api, errorMessage } from '@/lib/client';
+import { ACCOUNT_STATUS_LABELS, type AccountStatus } from '@/lib/account';
 import { ROLE_LABELS, type Role } from '@/lib/types';
 import { formatDate } from '@/lib/utils';
 
@@ -17,9 +18,18 @@ interface UserRow {
   roleId?: string | null;
   roleDisplayName?: string;
   isActive: boolean;
+  status: AccountStatus;
+  emailVerified: boolean;
+  lastInvitedAt?: string | null;
   createdAt: string;
   locations: { id: string; name: string; code: string; type: string }[];
 }
+
+const STATUS_TONE: Record<AccountStatus, 'green' | 'amber' | 'red'> = {
+  ACTIVE: 'green',
+  PENDING: 'amber',
+  SUSPENDED: 'red',
+};
 
 interface RoleOption {
   id: string;
@@ -62,6 +72,7 @@ export default function UsersPage() {
     roleId: '' as string,
     locationIds: [] as string[],
     isActive: true,
+    invite: true,
   });
 
   const load = useCallback(async () => {
@@ -100,15 +111,22 @@ export default function UsersPage() {
         });
         toast.push('success', 'User updated.');
       } else {
-        await api.post('/api/users', {
+        // Password optional: leave it blank to invite the user — they verify
+        // their email and choose their own password at /activate.
+        const created = await api.post<{ invitationSent?: boolean }>('/api/users', {
           name: form.name,
           email: form.email,
-          password: form.password,
+          ...(form.password ? { password: form.password } : {}),
           role: form.role,
           roleId: form.roleId || undefined,
           locationIds: form.locationIds,
         });
-        toast.push('success', 'User created.');
+        toast.push(
+          'success',
+          created.invitationSent
+            ? 'User created — an activation email is on its way.'
+            : 'User created.',
+        );
       }
       setOpen(false);
       setEditing(null);
@@ -123,8 +141,25 @@ export default function UsersPage() {
 
   const toggleActive = async (user: UserRow) => {
     try {
-      await api.patch(`/api/users/${user.id}`, { isActive: !user.isActive });
-      toast.push('success', `${user.name} ${user.isActive ? 'deactivated' : 'reactivated'}.`);
+      await api.patch(`/api/users/${user.id}`, { status: user.status === 'SUSPENDED' ? 'ACTIVE' : 'SUSPENDED' });
+      toast.push('success', `${user.name} ${user.status === 'SUSPENDED' ? 'reactivated' : 'suspended'}.`);
+      await load();
+    } catch (err) {
+      toast.push('error', errorMessage(err));
+    }
+  };
+
+  const resendInvite = async (user: UserRow) => {
+    try {
+      const res = await api.post<{ invitation: { emailDelivered: boolean; emailError?: string } }>(
+        `/api/users/${user.id}/invite`,
+        { userId: user.id },
+      );
+      if (res.invitation.emailDelivered) {
+        toast.push('success', `Activation email sent to ${user.email}.`);
+      } else {
+        toast.push('error', `Token issued but the email failed: ${res.invitation.emailError ?? 'provider not configured'}`);
+      }
       await load();
     } catch (err) {
       toast.push('error', errorMessage(err));
@@ -142,7 +177,7 @@ export default function UsersPage() {
               className="btn-primary"
               onClick={() => {
                 setEditing(null);
-                setForm({ name: '', email: '', password: '', role: 'CASHIER', roleId: systemRoleId('CASHIER'), locationIds: [], isActive: true });
+                setForm({ name: '', email: '', password: '', role: 'CASHIER', roleId: systemRoleId('CASHIER'), locationIds: [], isActive: true, invite: true });
                 setOpen(true);
               }}
               type="button"
@@ -184,7 +219,7 @@ export default function UsersPage() {
                       {user.locations.length ? user.locations.map((l) => l.name).join(', ') : 'All (unrestricted)'}
                     </td>
                     <td>
-                      <Badge tone={user.isActive ? 'green' : 'red'}>{user.isActive ? 'active' : 'disabled'}</Badge>
+                      <Badge tone={STATUS_TONE[user.status] ?? 'neutral'}>{ACCOUNT_STATUS_LABELS[user.status] ?? user.status}</Badge>
                     </td>
                     <td>{formatDate(user.createdAt)}</td>
                     <td className="whitespace-nowrap text-right">
@@ -202,6 +237,7 @@ export default function UsersPage() {
                                 roleId: user.roleId ?? systemRoleId(user.role),
                                 locationIds: user.locations.map((l) => l.id),
                                 isActive: user.isActive,
+                                invite: true,
                               });
                               setOpen(true);
                             }}
@@ -209,9 +245,15 @@ export default function UsersPage() {
                           >
                             Edit
                           </button>
-                          <button className="btn-ghost btn-sm" onClick={() => toggleActive(user)} type="button">
-                            {user.isActive ? 'Disable' : 'Enable'}
-                          </button>
+                          {user.status === 'PENDING' ? (
+                            <button className="btn-ghost btn-sm" onClick={() => resendInvite(user)} type="button">
+                              Resend invite
+                            </button>
+                          ) : (
+                            <button className="btn-ghost btn-sm" onClick={() => toggleActive(user)} type="button">
+                              {user.status === 'SUSPENDED' ? 'Reactivate' : 'Suspend'}
+                            </button>
+                          )}
                         </>
                       )}
                     </td>
@@ -246,12 +288,21 @@ export default function UsersPage() {
             <Field label="Email">
               <input className="input" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
             </Field>
-            <Field label={editing ? 'New password (optional)' : 'Password'}>
+            <Field
+              label={editing ? 'New password (optional)' : 'Password (optional)'}
+              hint={
+                editing
+                  ? undefined
+                  : 'Leave blank to send an activation email — the user verifies their address and sets their own password. Set one to create the account ready-to-use.'
+              }
+            >
               <input
                 className="input"
                 type="password"
                 value={form.password}
                 onChange={(e) => setForm({ ...form, password: e.target.value })}
+                placeholder={editing ? undefined : 'Blank = email an activation link'}
+                autoComplete="new-password"
               />
             </Field>
             <Field label="Role" hint={form.roleId ? allRoles.find((r) => r.id === form.roleId)?.description ?? ROLE_HINTS[form.role] : ROLE_HINTS[form.role]}>
@@ -324,9 +375,15 @@ export default function UsersPage() {
               <input
                 type="checkbox"
                 checked={form.isActive}
+                disabled={editing.status === 'PENDING'}
                 onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
               />
               Account is active
+              {editing.status === 'PENDING' && (
+                <span className="text-xs text-ink-500 dark:text-ink-400">
+                  — awaiting activation; use “Resend invite” instead.
+                </span>
+              )}
             </label>
           )}
         </div>

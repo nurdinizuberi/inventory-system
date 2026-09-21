@@ -110,3 +110,108 @@ export async function issueVerificationForEmail(email: string) {
   });
   return { user, token: raw };
 }
+
+// ---------------------------------------------------------------------------
+// Account activation tokens.
+//
+// Same security model as reset tokens: a 32-byte random token is emailed in
+// the clear, only its SHA-256 hash is stored, it expires, and it is consumed
+// on use. It drives the PENDING -> ACTIVE transition at /activate.
+// ---------------------------------------------------------------------------
+
+const ACTIVATION_TTL_MS = 72 * 60 * 60 * 1000; // 72 hours
+
+export interface IssueActivationInput {
+  email: string;
+  /** Tenant scoping so a like-named user in another tenant is not matched. */
+  tenantId?: string | null;
+  /** Who sent the invite (for the audit trail / "invited by" display). */
+  invitedById?: string | null;
+}
+
+/**
+ * Mint an activation token for an existing account. Creates/refreshes the
+ * hashed token + expiry and stamps `lastInvitedAt`. Returns null when no
+ * matching user exists (or the account is suspended — never invite those).
+ */
+export async function issueActivation(input: IssueActivationInput) {
+  const user = await prisma.user.findFirst({
+    where: {
+      email: input.email.toLowerCase(),
+      ...(input.tenantId !== undefined ? { tenantId: input.tenantId } : {}),
+    },
+  });
+  if (!user || user.status === 'SUSPENDED') return null;
+  const raw = crypto.randomBytes(32).toString('hex');
+  await prisma.user.update({
+    where: { id: user.id },
+    data: {
+      activationTokenHash: hashToken(raw),
+      activationTokenExpiresAt: new Date(Date.now() + ACTIVATION_TTL_MS),
+      lastInvitedAt: new Date(),
+      ...(input.invitedById ? { invitedById: input.invitedById } : {}),
+    },
+  });
+  return { user, token: raw, expiresAt: new Date(Date.now() + ACTIVATION_TTL_MS) };
+}
+
+/** True when the stored activation token matches and has not expired. */
+export function activationTokenValid(
+  user: { activationTokenHash: string | null; activationTokenExpiresAt: Date | null },
+  raw: string,
+): boolean {
+  if (!user.activationTokenHash || !user.activationTokenExpiresAt) return false;
+  if (Date.now() > user.activationTokenExpiresAt.getTime()) return false;
+  return safeEqual(hashToken(raw), user.activationTokenHash);
+}
+
+/** Load the user a raw activation token belongs to, if any (no consuming). */
+export async function findUserByActivationToken(raw: string) {
+  const hash = hashToken(raw);
+  const user = await prisma.user.findFirst({ where: { activationTokenHash: hash } });
+  if (!user) return null;
+  if (!activationTokenValid(user, raw)) return null;
+  return user;
+}
+
+export interface CompleteActivationInput {
+  raw: string;
+  name?: string;
+  phone?: string | null;
+  password: string;
+}
+
+/**
+ * Consume an activation token and activate the account: verifies the email,
+ * updates the profile, sets the user-chosen password and flips status
+ * PENDING -> ACTIVE (isActive stays in sync). Re-activating an already-ACTIVE
+ * account is allowed as a profile/password update — the token is still
+ * consumed so the emailed link can never be reused.
+ */
+export async function completeActivation(
+  input: CompleteActivationInput,
+): Promise<
+  | { ok: false; reason: 'invalid_or_expired' }
+  | { ok: true; user: { id: string; email: string; name: string; status: string } }
+> {
+  const hash = hashToken(input.raw);
+  const user = await prisma.user.findFirst({ where: { activationTokenHash: hash } });
+  if (!user || !activationTokenValid(user, input.raw)) return { ok: false, reason: 'invalid_or_expired' };
+
+  const passwordHash = await bcrypt.hash(input.password, RESET_TOKEN_ROUNDS);
+  const updated = await prisma.user.update({
+    where: { id: user.id },
+    data: {
+      passwordHash,
+      name: input.name?.trim() || user.name,
+      phone: input.phone === undefined ? user.phone : input.phone,
+      emailVerifiedAt: user.emailVerifiedAt ?? new Date(),
+      activatedAt: user.activatedAt ?? new Date(),
+      status: 'ACTIVE',
+      isActive: true,
+      activationTokenHash: null,
+      activationTokenExpiresAt: null,
+    },
+  });
+  return { ok: true, user: { id: updated.id, email: updated.email, name: updated.name, status: updated.status } };
+}

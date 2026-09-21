@@ -161,6 +161,31 @@ purchases, transfers, returns, adjustments and **every ledger row and audit entr
 Provisioning a new organization is atomic: the admin layer creates the tenant, seeds the five
 system roles (`SYSTEM_ROLES` in `src/lib/rbac.ts`) and a Tenant Admin user in one transaction.
 
+---
+
+## Accounts & activation
+
+Every user carries a first-class lifecycle status — `PENDING`, `ACTIVE`, `SUSPENDED` — declared in
+`src/lib/account.ts`. The legacy `isActive` flag is kept as a derived mirror (`isActive =
+status === 'ACTIVE'`) so all pre-existing auth paths are unaffected; the migration backfilled
+every existing user to `ACTIVE` (previously-disabled users to `SUSPENDED`) without touching ids,
+roles, or historical data.
+
+- **Invited users** (created from the Users page without a password) start `PENDING` with an
+  unusable random credential. They receive a 72-hour, single-use, hashed activation token
+  (`User.activationTokenHash` — same security model as password-reset tokens) and complete
+  self-service activation at `/activate`: the link verifies their email, they confirm their
+  name/phone, and they choose their own password. Only then does the account flip `ACTIVE`.
+- **Re-sending** — admins resend the invitation from the Users page (each send mints a fresh
+  token, invalidating prior links); PENDING users who hit "Forgot password" are emailed a new
+  activation link instead of a reset link.
+- **Suspension** — `ACTIVE <-> SUSPENDED` transitions from the Users page; suspended users
+  cannot sign in and get a generic error (no account enumeration). A PENDING account can never
+  be force-activated from the admin side — the emailed link is what proves mailbox ownership.
+- All emails go through the existing Resend integration (`src/lib/email.ts`; set
+  `RESEND_API_KEY`, `EMAIL_FROM`). Without a key, the `console` provider prints the email —
+  handy in dev.
+
 The **global admin portal** lives at `/admin` — a platform layer above the tenants. It is
 deliberately not linked from the application's navigation to keep it out of the way; navigate to
 `/admin` directly. Sign in with the global admin seeded by `npm run setup`:
@@ -337,7 +362,7 @@ installer.
    | `NEXT_PUBLIC_CURRENCY` | no | build-time, defaults to `TZS` |
    | `AUTO_SEED` | set to `0` | keeps demo data off a production database |
    | `NEXT_PUBLIC_APP_URL` | no | canonical origin used to build absolute links in emails (defaults to the request `Host`) |
-   | `RESEND_API_KEY` | no | enables transactional email (password reset, email verification) via Resend |
+   | `RESEND_API_KEY` | no | enables transactional email (activation invites, password reset, email verification) via Resend |
    | `EMAIL_FROM` | no | sender line; defaults to `MindBoxAfrica <no-reply@mindboxafrica.vercel.app>` |
    | `EMAIL_PROVIDER` | no | `resend` (default when a key is set) or `console` to print instead of send |
    | `REQUIRE_EMAIL_VERIFICATION` | no | `1` to block sign-in until the email address is confirmed |

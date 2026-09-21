@@ -2,9 +2,11 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { requestMeta } from '@/lib/auth';
 import { getAppBaseUrl } from '@/lib/app-url';
+import { sendActivationEmail } from '@/lib/account-email';
 import { sendEmail } from '@/lib/email';
-import { issueResetForEmail } from '@/lib/tokens';
+import { issueActivation, issueResetForEmail } from '@/lib/tokens';
 import { logInfo } from '@/lib/log';
+import { prisma } from '@/lib/db';
 
 const schema = z.object({ email: z.string().email('Enter a valid email address') });
 
@@ -33,6 +35,21 @@ export async function POST(request: Request) {
   const meta = await requestMeta();
 
   try {
+    // PENDING accounts have no usable password to reset — they need their
+    // activation link (re)sent instead. Same generic response either way.
+    const target = await prisma.user.findFirst({ where: { email: email.toLowerCase() } });
+    if (target?.status === 'PENDING') {
+      const invited = await issueActivation({ email });
+      if (invited) {
+        const link = `${await getAppBaseUrl()}/activate?token=${invited.token}`;
+        await sendActivationEmail({ to: invited.user.email, name: invited.user.name, link, isNew: false });
+        logInfo('activation resent via forgot-password', { email, ip: meta.ip });
+      }
+      return NextResponse.json({
+        message: 'If an account with that email exists, a password reset link has been sent.',
+      });
+    }
+
     const issued = await issueResetForEmail(email);
     if (issued) {
       const baseUrl = await getAppBaseUrl();
