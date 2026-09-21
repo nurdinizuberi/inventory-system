@@ -383,6 +383,61 @@ export default function AnalyticsReportPage() {
             />
           </div>
 
+          {trends.length > 0 && (
+            <Card title="Trend distribution" subtitle="How your variants are moving vs the prior period — the momentum picture at a glance">
+              <div className="grid gap-6 lg:grid-cols-2">
+                <div>
+                  <p className="label">Variants per trend</p>
+                  <Bars
+                    height={220}
+                    data={[
+                      {
+                        label: 'Rising',
+                        values: [{ key: 'rising-count', name: 'Variants', value: data.trends.totals.rising, color: 'emerald' }],
+                      },
+                      {
+                        label: 'Steady',
+                        values: [{ key: 'steady-count', name: 'Variants', value: data.trends.totals.steady, color: 'slate' }],
+                      },
+                      {
+                        label: 'Declining',
+                        values: [{ key: 'declining-count', name: 'Variants', value: data.trends.totals.declining, color: 'rose' }],
+                      },
+                    ]}
+                    format={(v) => `${v} variant(s)`}
+                  />
+                </div>
+                <div>
+                  <p className="label">Units sold per trend</p>
+                  <Bars
+                    height={220}
+                    data={([
+                      ['Rising', 'rising', 'emerald'],
+                      ['Steady', 'steady', 'slate'],
+                      ['Declining', 'declining', 'rose'],
+                    ] as const).map(([label, trend, color]) => ({
+                      label,
+                      values: [
+                        {
+                          key: `${trend}-units`,
+                          name: 'Units',
+                          value: trends.filter((row) => row.trend === trend).reduce((sum, row) => sum + row.units, 0),
+                          color,
+                        },
+                      ],
+                    }))}
+                    format={(v) => `${v} unit(s)`}
+                  />
+                </div>
+              </div>
+              <p className="muted mt-3 text-xs">
+                Rising = ≥ +15% vs the prior period, declining = ≤ −15%, steady in between. A wide
+                rising bar with a thin declining bar means the assortment is gaining momentum;
+                the opposite is a prompt to review pricing or restocking on the declining lines.
+              </p>
+            </Card>
+          )}
+
           <Card>
             {trends.length === 0 ? (
               <Empty message="No sales in this period for the selected scope." />
