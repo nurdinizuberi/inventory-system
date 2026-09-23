@@ -7,6 +7,7 @@ import { useAuth } from './auth-context';
 import { LowStockAlert } from './low-stock-alert';
 import { ThemeToggle } from './theme-context';
 import { ROLE_LABELS, type Role } from '@/lib/types';
+import { LOCATION_MODE_DESCRIPTIONS, LOCATION_MODE_LABELS } from '@/lib/location-mode';
 
 interface NavItem {
   href: string;
@@ -37,7 +38,7 @@ const NAV: NavItem[] = [
 ];
 
 export function Shell({ children }: { children: ReactNode }) {
-  const { user, loading, can, logout } = useAuth();
+  const { user, loading, can, logout, activeLocation, activeMode, setActiveLocation } = useAuth();
   const pathname = usePathname();
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -120,18 +121,33 @@ export function Shell({ children }: { children: ReactNode }) {
             </button>
             <div>
               <p className="text-sm font-semibold text-ink-900 dark:text-ink-100">MindBoxAfrica</p>
-              <p className="text-xs text-ink-500 dark:text-ink-400">
-                {user.locations.length
-                  ? user.locations.map((l) => l.name).join(' · ')
-                  : user.unrestricted
-                    ? 'All locations'
-                    : 'No location assigned'}
-              </p>
+              {user.locations.length > 1 ? (
+                <select
+                  className="mt-0.5 max-w-56 bg-transparent text-xs text-ink-500 outline-none dark:text-ink-400"
+                  value={activeLocation?.id ?? ''}
+                  onChange={(event) => setActiveLocation(event.target.value)}
+                  aria-label="Active location"
+                >
+                  {user.locations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}
+                </select>
+              ) : (
+                <p className="text-xs text-ink-500 dark:text-ink-400">{activeLocation?.name ?? (user.unrestricted ? 'All locations' : 'No location assigned')}</p>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-3">
             <LowStockAlert />
             <ThemeToggle />
+            <span
+              className={`hidden rounded-full px-2.5 py-1 text-xs font-medium sm:inline-flex ${
+                activeMode === 'CONTROLLED'
+                  ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200'
+                  : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200'
+              }`}
+              title={LOCATION_MODE_DESCRIPTIONS[activeMode]}
+            >
+              {LOCATION_MODE_LABELS[activeMode]}
+            </span>
             <span className="badge bg-ink-100 text-ink-700 dark:bg-ink-800 dark:text-ink-200">{ROLE_LABELS[user.role as Role]}</span>
             <button
               className="btn-secondary btn-sm"

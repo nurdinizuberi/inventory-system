@@ -171,6 +171,16 @@ export async function POST(request: Request) {
       if (!data.reason?.trim()) return badRequest('A reason is required for opening stock.');
       await assertAction(ctx, 'stock.adjust');
       await assertLocationAccess(ctx, data.locationId);
+      const location = await prisma.location.findFirst({
+        where: { id: data.locationId, ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}) },
+        select: { type: true },
+      });
+      if (location?.type === 'WAREHOUSE') {
+        return NextResponse.json(
+          { error: 'Warehouse stock must enter through a purchase receipt or an approved stock adjustment.' },
+          { status: 409 },
+        );
+      }
     }
 
     // A new variant is sold and valued on its own. It may inherit the product

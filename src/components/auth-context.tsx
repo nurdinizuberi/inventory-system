@@ -4,12 +4,13 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/client';
 import { useInactivitySignout } from '@/components/use-inactivity-signout';
+import { locationMode, type LocationMode } from '@/lib/location-mode';
 
 export interface SessionLocation {
   id: string;
   name: string;
   code: string;
-  type: string;
+  type: 'WAREHOUSE' | 'RETAIL_STORE' | 'DAMAGED' | string;
 }
 
 export interface SessionUser {
@@ -30,6 +31,9 @@ interface AuthState {
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
+  activeLocation: SessionLocation | null;
+  activeMode: LocationMode;
+  setActiveLocation: (locationId: string) => void;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -38,6 +42,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [permissions, setPermissions] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
+  const [activeLocationId, setActiveLocationId] = useState<string | null>(null);
   const router = useRouter();
 
   const refresh = useCallback(async () => {
@@ -56,6 +61,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (!user) {
+      setActiveLocationId(null);
+      return;
+    }
+    const stored = window.localStorage.getItem('ims_active_location');
+    const valid = stored && user.locations.some((location) => location.id === stored);
+    setActiveLocationId(valid ? stored : user.locations[0]?.id ?? null);
+  }, [user]);
+
+  const setActiveLocation = useCallback((locationId: string) => {
+    setActiveLocationId(locationId);
+    window.localStorage.setItem('ims_active_location', locationId);
+  }, []);
 
   const login = useCallback(
     async (email: string, password: string) => {
@@ -84,16 +104,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo<AuthState>(
-    () => ({
-      user,
-      permissions,
-      loading,
-      can: (action: string) => user?.role === 'ADMIN' || permissions[action] === true,
-      login,
-      logout,
-      refresh,
-    }),
-    [user, permissions, loading, login, logout, refresh],
+    () => {
+      const activeLocation = user?.locations.find((location) => location.id === activeLocationId) ?? user?.locations[0] ?? null;
+      return {
+        user,
+        permissions,
+        loading,
+        can: (action: string) => user?.role === 'ADMIN' || permissions[action] === true,
+        login,
+        logout,
+        refresh,
+        activeLocation,
+        activeMode: locationMode(activeLocation?.type),
+        setActiveLocation,
+      };
+    },
+    [user, permissions, loading, login, logout, refresh, activeLocationId, setActiveLocation],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

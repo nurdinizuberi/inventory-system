@@ -14,6 +14,7 @@ import {
   type RecountReason,
 } from '@/lib/types';
 import { currency, escapeHtml } from '@/lib/utils';
+import { locationMode } from '@/lib/location-mode';
 
 interface BatchInfo {
   code: string;
@@ -119,7 +120,8 @@ interface VariantEdit {
 }
 
 export default function ProductsPage() {
-  const { can } = useAuth();
+  const { can, activeLocation } = useAuth();
+  const controlledMode = locationMode(activeLocation?.type) === 'CONTROLLED';
   const toast = useToast();
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -1287,7 +1289,9 @@ export default function ProductsPage() {
             <div className="rounded-lg border border-ink-200 p-3 dark:border-ink-700">
               <p className="label mb-2">Starting stock (optional)</p>
               <p className="mb-2 text-xs text-ink-500 dark:text-ink-400">
-                Enter a starting quantity to open initial stock. This creates an opening batch so the product is immediately available.
+                {controlledMode
+                  ? 'Warehouse stock must enter through a purchase receipt or an approved stock adjustment.'
+                  : 'Enter a starting quantity to open initial stock. This creates an opening batch so the product is immediately available.'}
               </p>
               <div className="grid gap-3 sm:grid-cols-3">
                 <Field label="Quantity">
@@ -1295,6 +1299,7 @@ export default function ProductsPage() {
                     className="input"
                     type="number"
                     min={0}
+                    disabled={controlledMode}
                     placeholder="0"
                     value={form.openingQuantity}
                     onChange={(e) => { setForm({ ...form, openingQuantity: e.target.value }); setFormErrors({ ...formErrors, openingQuantity: '' }); }}
@@ -1304,6 +1309,7 @@ export default function ProductsPage() {
                 <Field label="Location">
                   <select
                     className="input"
+                    disabled={controlledMode}
                     value={form.openingLocationId}
                     onChange={(e) => setForm({ ...form, openingLocationId: e.target.value })}
                   >
@@ -1357,7 +1363,7 @@ export default function ProductsPage() {
                       onChange={(e) => setVariantDrafts(variantDrafts.map((d, i) => (i === index ? { ...d, cost: e.target.value } : d)))} />
                     <input className="input" placeholder="price" type="number" value={draft.price}
                       onChange={(e) => setVariantDrafts(variantDrafts.map((d, i) => (i === index ? { ...d, price: e.target.value } : d)))} />
-                    <input className="input" placeholder="qty" type="number" min={0} value={draft.quantity || ''}
+                    <input className="input" placeholder="qty" type="number" min={0} disabled={controlledMode} value={draft.quantity || ''}
                       onChange={(e) => setVariantDrafts(variantDrafts.map((d, i) => (i === index ? { ...d, quantity: Number(e.target.value), locationId: Number(e.target.value) > 0 && !d.locationId ? (openingLocations[0]?.id ?? '') : d.locationId } : d)))} />
                     <button className="btn-ghost btn-sm absolute right-1 top-1 sm:static"
                       onClick={() => setVariantDrafts(variantDrafts.filter((_, i) => i !== index))} type="button">✕</button>
@@ -1431,7 +1437,7 @@ export default function ProductsPage() {
               { mode: 'add_stock' as const, icon: '📦', title: 'Add New Stock (New Batch)', desc: 'I received new stock. Enter new quantity, new cost, and new selling price. Old stock keeps its old cost.' },
               { mode: 'recount' as const, icon: '🔢', title: 'Stock Recount (Adjust Quantity)', desc: 'I counted my stock. Correct the quantity. Cost and selling price stay the same.' },
               { mode: 'edit_details' as const, icon: '✏️', title: 'Edit Details Only', desc: 'Change name, description, SKU, or selling price. No stock changes.' },
-            ]).map((opt) => (
+            ]).filter((opt) => !controlledMode || opt.mode === 'edit_details').map((opt) => (
               <label
                 key={opt.mode}
                 className="flex cursor-pointer items-start gap-3 rounded-lg border border-ink-200 p-4 transition hover:border-ink-400 dark:border-ink-700 dark:hover:border-ink-500"
@@ -1450,6 +1456,11 @@ export default function ProductsPage() {
                 </div>
               </label>
             ))}
+            {controlledMode && (
+              <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-800 dark:bg-amber-900/20 dark:text-amber-200">
+                This warehouse is in Controlled / Audited Mode. Stock quantities are read-only here. Raise a stock adjustment for recounts, damage, or loss.
+              </p>
+            )}
           </div>
         )}
 

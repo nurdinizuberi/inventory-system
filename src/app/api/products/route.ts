@@ -131,6 +131,28 @@ export async function POST(request: Request) {
 
     const data = parsed.data;
     const optionNames = data.optionNames.filter(Boolean);
+    const openingLocationIds = [
+      ...(data.openingQuantity && data.openingQuantity > 0 && data.openingLocationId ? [data.openingLocationId] : []),
+      ...data.variants
+        .filter((variant) => (variant.quantity ?? 0) > 0 && variant.locationId)
+        .map((variant) => variant.locationId as string),
+    ];
+    if (openingLocationIds.length > 0) {
+      const warehouseOpening = await prisma.location.findFirst({
+        where: {
+          id: { in: openingLocationIds },
+          type: 'WAREHOUSE',
+          ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}),
+        },
+        select: { id: true },
+      });
+      if (warehouseOpening) {
+        return NextResponse.json(
+          { error: 'Warehouse opening stock must enter through a purchase receipt or an approved stock adjustment.' },
+          { status: 409 },
+        );
+      }
+    }
 
     // Every product gets at least a default variant so stock, purchase and POS
     // logic stays uniform even for products with no real options.

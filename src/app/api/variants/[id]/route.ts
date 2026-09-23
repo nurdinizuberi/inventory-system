@@ -98,6 +98,16 @@ export async function PATCH(request: Request, { params }: Params) {
       if (!data.stockLocationId) return badRequest('A location is required when adjusting quantity.');
       await assertAction(ctx, 'stock.adjust');
       await assertLocationAccess(ctx, data.stockLocationId);
+      const location = await prisma.location.findFirst({
+        where: { id: data.stockLocationId, ...(ctx.tenantId ? { tenantId: ctx.tenantId } : {}) },
+        select: { type: true },
+      });
+      if (location?.type === 'WAREHOUSE') {
+        return NextResponse.json(
+          { error: 'Warehouse quantities are controlled. Raise a stock adjustment for approval instead.' },
+          { status: 409 },
+        );
+      }
     } else if (revalueCost !== null) {
       await assertAction(ctx, 'stock.adjust');
     }
