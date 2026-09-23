@@ -7,9 +7,10 @@ import { useAuth } from '@/components/auth-context';
 import { PasswordInput } from '@/components/password-input';
 import { ThemeToggle } from '@/components/theme-context';
 import { errorMessage } from '@/lib/client';
+import { LOCATION_MODE_LABELS, locationMode } from '@/lib/location-mode';
 
 export default function LoginPage() {
-  const { login, user, loading } = useAuth();
+  const { login, user, loading, setActiveLocation } = useAuth();
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -17,9 +18,70 @@ export default function LoginPage() {
   const [pendingActivation, setPendingActivation] = useState(false);
   const [busy, setBusy] = useState(false);
 
+  const [selectedLocationId, setSelectedLocationId] = useState('');
+
   useEffect(() => {
-    if (!loading && user) router.replace('/');
-  }, [loading, user, router]);
+    if (!user) return;
+    if (user.locations.length === 1) {
+      setActiveLocation(user.locations[0].id);
+      router.replace('/');
+    } else if (user.locations.length === 0) {
+      router.replace('/');
+    }
+  }, [user, router, setActiveLocation]);
+
+  if (!loading && user && user.locations.length > 1) {
+    const selectedLocation = user.locations.find((location) => location.id === selectedLocationId);
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-ink-50 px-6 py-12 dark:bg-ink-950">
+        <div className="w-full max-w-2xl">
+          <p className="text-xs font-semibold uppercase tracking-widest text-violet-700 dark:text-violet-300">MindBoxAfrica</p>
+          <h1 className="mt-2 text-2xl font-semibold text-ink-900 dark:text-ink-100">Choose your active location</h1>
+          <p className="muted mt-1">Your location determines the tools and stock rules you will use.</p>
+          <div className="mt-6 grid gap-3 sm:grid-cols-2">
+            {user.locations.map((location) => {
+              const mode = locationMode(location.type);
+              const selected = selectedLocationId === location.id;
+              return (
+                <button
+                  key={location.id}
+                  type="button"
+                  onClick={() => setSelectedLocationId(location.id)}
+                  className={`rounded-xl border p-4 text-left transition ${
+                    selected
+                      ? 'border-violet-500 bg-violet-50 ring-2 ring-violet-500/20 dark:bg-violet-900/20'
+                      : 'border-ink-200 bg-white hover:border-violet-300 dark:border-ink-700 dark:bg-ink-900'
+                  }`}
+                >
+                  <p className="font-medium text-ink-900 dark:text-ink-100">{location.name}</p>
+                  <p className="mt-1 text-xs text-ink-500 dark:text-ink-400">{location.code}</p>
+                  <span className={`mt-4 inline-flex rounded-full px-2 py-1 text-xs font-medium ${
+                    mode === 'CONTROLLED'
+                      ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200'
+                      : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200'
+                  }`}>
+                    {LOCATION_MODE_LABELS[mode]}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <button
+            className="btn-primary mt-6 w-full sm:w-auto"
+            disabled={!selectedLocation}
+            onClick={() => {
+              if (!selectedLocation) return;
+              setActiveLocation(selectedLocation.id);
+              router.replace('/');
+            }}
+            type="button"
+          >
+            Continue to {selectedLocation?.name ?? 'workspace'}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (!loading && user) return null;
 
